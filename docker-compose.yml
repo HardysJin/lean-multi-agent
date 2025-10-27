@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  lean:
+    image: quantconnect/lean:latest
+    container_name: lean-multi-agent
+    volumes:
+      - ./Algorithm:/Lean/Algorithm:rw
+      - ./Data:/Lean/Data:rw
+      - ./config.json:/Lean/Launcher/bin/Debug/config.json:ro
+      - ./Results:/Results:rw
+      - ./Logs:/Lean/Logs:rw
+    environment:
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - NEWS_API_KEY=${NEWS_API_KEY:-}
+      - ALPHAVANTAGE_API_KEY=${ALPHAVANTAGE_API_KEY:-}
+    entrypoint: >
+      bash -c "
+        echo '安装Python依赖...' &&
+        pip install --quiet anthropic newsapi-python yfinance requests &&
+        echo '✅ 依赖安装完成' &&
+        echo '启动LEAN引擎...' &&
+        dotnet /Lean/Launcher/bin/Debug/QuantConnect.Lean.Launcher.dll --config /Lean/Launcher/bin/Debug/config.json
+      "
+    restart: "no"

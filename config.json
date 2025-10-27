@@ -1,0 +1,21 @@
+{
+    "algorithm-type-name": "ProductionMultiAgent",
+    "algorithm-language": "Python",
+    "algorithm-location": "/Lean/Algorithm/MultiAgent/main.py",
+    
+    "data-folder": "/Lean/Data",
+    "results-destination-folder": "/Results",
+    "log-handler": "ConsoleLogHandler",
+    
+    "environment": "backtesting",
+    "close-automatically": true,
+    
+    "parameters": {
+        "ema-fast": "10",
+        "ema-slow": "20"
+    },
+    
+    "job-user-id": "0",
+    "api-access-token": "",
+    "job-organization-id": ""
+}
