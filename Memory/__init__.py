@@ -22,6 +22,11 @@ from .vector_store import (
     create_vector_store,
 )
 
+from .sql_store import (
+    SQLStore,
+    create_sql_store,
+)
+
 __all__ = [
     'Timeframe',
     'DecisionRecord',
@@ -31,4 +36,6 @@ __all__ = [
     'create_memory_id',
     'VectorStore',
     'create_vector_store',
+    'SQLStore',
+    'create_sql_store',
 ]
