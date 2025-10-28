@@ -1,7 +1,7 @@
 {
-    "algorithm-type-name": "MACDTrendAlgorithm",
+    "algorithm-type-name": "BasicTemplateAlgorithmDaily",
     "algorithm-language": "Python",
-    "algorithm-location": "/Lean/Algorithm.Custom/MACDTrendAlgorithm.py",
+    "algorithm-location": "/Lean/Algorithm.Custom/BasicTemplateAlgorithmDaily.py",
     
     "data-folder": "/Lean/Data",
     "results-destination-folder": "/Results",
@@ -10,10 +10,12 @@
     "environment": "backtesting",
     "close-automatically": true,
     
-    "parameters": {
-        "ema-fast": "10",
-        "ema-slow": "20"
-    },
+    "python-additional-paths": [
+        "/workspace/Utils",
+        "/Lean/Common"
+    ],
+    
+    "parameters": {},
     
     "job-user-id": "0",
     "api-access-token": "",

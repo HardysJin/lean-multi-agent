@@ -5,3 +5,12 @@ Data/cache/
 __pycache__/
 *.pyc
 .DS_Store
+
+# LEAN 自动生成
+storage/
+
+# 临时测试文件
+tmp/
+*.tmp
+
+Lean/*
