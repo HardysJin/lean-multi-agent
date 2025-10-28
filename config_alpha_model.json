@@ -1,0 +1,23 @@
+{
+    "algorithm-type-name": "AddAlphaModelAlgorithm",
+    "algorithm-language": "Python",
+    "algorithm-location": "/workspace/Lean/Algorithm.Python/AddAlphaModelAlgorithm.py",
+    
+    "data-folder": "/Lean/Data",
+    "results-destination-folder": "/Results",
+    "log-handler": "ConsoleLogHandler",
+    
+    "environment": "backtesting",
+    "close-automatically": true,
+    
+    "python-additional-paths": [
+        "/workspace/Utils",
+        "/Lean/Common"
+    ],
+    
+    "parameters": {},
+    
+    "job-user-id": "0",
+    "api-access-token": "",
+    "job-organization-id": ""
+}

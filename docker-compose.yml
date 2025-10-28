@@ -25,8 +25,11 @@ services:
       bash -c "
         export PYTHONPATH=/workspace/Utils:/Lean/Algorithm.Custom:/Lean/Algorithm:/Lean/Common &&
         echo '安装Python依赖...' &&
-        pip install --quiet anthropic newsapi-python yfinance pandas requests &&
+        pip install --quiet anthropic newsapi-python yfinance pandas requests tabulate &&
         echo '✅ 依赖安装完成' &&
+        echo '' &&
+        python3 /workspace/Utils/auto_download_data.py &&
+        echo '' &&
         echo '启动LEAN引擎...' &&
         dotnet /Lean/Launcher/bin/Debug/QuantConnect.Lean.Launcher.dll --config /Lean/Launcher/bin/Debug/config.json
       "
