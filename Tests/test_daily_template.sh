@@ -6,6 +6,9 @@ echo "使用日线数据的 BasicTemplateAlgorithm"
 echo "======================================"
 echo ""
 
+# 切换到项目根目录
+cd "$(dirname "$0")/.." || exit 1
+
 # 检查文件是否存在
 echo "1. 检查算法文件..."
 if [ -f "Algorithm/BasicTemplateAlgorithmDaily.py" ]; then
@@ -17,7 +20,7 @@ fi
 
 echo ""
 echo "2. 检查配置文件..."
-if [ -f "config_daily_template.json" ]; then
+if [ -f "Configs/config_daily_template.json" ]; then
     echo "   ✅ 配置文件存在"
 else
     echo "   ❌ 配置文件不存在"

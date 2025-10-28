@@ -8,22 +8,21 @@ services:
       # 映射整个项目目录（简化配置，新文件自动可用）
       - ./:/workspace:rw
       # LEAN 特定目录映射
-      - ./Algorithm:/Lean/Algorithm.Custom:rw
       - ./Lean/Common:/Lean/Common:ro
-      - ./Data:/Lean/Data:rw
+      - ./Lean/Data:/Lean/Data:rw
       - ./Results:/Results:rw
-      - ./Logs:/Lean/Logs:rw
+      # - ./Logs:/Lean/Logs:rw
       # 配置文件（支持通过环境变量切换）
-      - ./${CONFIG_FILE:-config.json}:/Lean/Launcher/bin/Debug/config.json:ro
+      - ./Configs/${CONFIG_FILE:-config.json}:/Lean/Launcher/bin/Debug/config.json:ro
     working_dir: /workspace
     environment:
       - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
       - NEWS_API_KEY=${NEWS_API_KEY:-}
       - ALPHAVANTAGE_API_KEY=${ALPHAVANTAGE_API_KEY:-}
-      - PYTHONPATH=/workspace/Utils:/Lean/Algorithm.Custom:/Lean/Algorithm:/Lean/Common
+      - PYTHONPATH=/workspace/Utils:/workspace/Algorithm:/Lean/Algorithm:/Lean/Common
     entrypoint: >
       bash -c "
-        export PYTHONPATH=/workspace/Utils:/Lean/Algorithm.Custom:/Lean/Algorithm:/Lean/Common &&
+        export PYTHONPATH=/workspace/Utils:/workspace/Algorithm:/Lean/Algorithm:/Lean/Common &&
         echo '安装Python依赖...' &&
         pip install --quiet anthropic newsapi-python yfinance pandas requests tabulate &&
         echo '✅ 依赖安装完成' &&

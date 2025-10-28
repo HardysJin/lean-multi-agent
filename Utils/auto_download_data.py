@@ -36,6 +36,7 @@ def extract_symbols_from_code(algorithm_path):
         
         # 匹配常见的股票代码模式
         patterns = [
+            r'add[_-]?equity[_-]?smart\s*\(\s*["\']([A-Z]{1,5})["\']',  # add_equity_smart("SPY") 或 AddEquitySmart("SPY")
             r'add[_-]?equity\s*\(\s*["\']([A-Z]{1,5})["\']',  # add_equity("SPY") 或 AddEquity("SPY")
             r'self\.symbol\s*=\s*["\']([A-Z]{1,5})["\']',  # self.symbol = "SPY"
             r'[Ss]et[Bb]enchmark\s*\(\s*["\']([A-Z]{1,5})["\']',  # SetBenchmark("SPY")

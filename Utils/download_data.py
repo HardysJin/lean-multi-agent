@@ -26,7 +26,7 @@ from pathlib import Path
 DEFAULT_SYMBOLS = ['SPY', 'AAPL', 'NVDA', 'MSFT', 'GOOGL', 'TSLA']
 DEFAULT_START = '2020-01-01'
 DEFAULT_END = '2025-09-30'
-DATA_DIR = 'Data/equity/usa/daily'
+DATA_DIR = './Lean/Data/equity/usa/daily'
 
 def check_existing_data(symbol, data_dir=DATA_DIR):
     """检查本地已有数据的日期范围"""
