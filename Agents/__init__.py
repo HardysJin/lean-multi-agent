@@ -16,6 +16,7 @@ Legacy (Old Implementation):
 
 from .base_mcp_agent import BaseMCPAgent, ExampleAgent
 from .technical_agent import TechnicalAnalysisAgent
+from .news_agent import NewsAgent, NewsArticle, NewsSentimentReport
 from .meta_agent import MetaAgent, MetaDecision, ToolCall, create_meta_agent_with_technical
 from .llm_config import (
     LLMConfig, LLMProvider,
@@ -28,6 +29,9 @@ __all__ = [
     'BaseMCPAgent',
     'ExampleAgent',
     'TechnicalAnalysisAgent',
+    'NewsAgent',
+    'NewsArticle',
+    'NewsSentimentReport',
     'MetaAgent',
     'MetaDecision',
     'ToolCall',

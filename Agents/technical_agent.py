@@ -34,7 +34,7 @@ class TechnicalAnalysisAgent(BaseMCPAgent):
     直接使用LEAN的Indicators或自己计算指标
     """
     
-    def __init__(self, algorithm=None):
+    def __init__(self, algorithm=None, llm_config=None):
         """
         初始化技术分析Agent
         
@@ -42,11 +42,14 @@ class TechnicalAnalysisAgent(BaseMCPAgent):
             algorithm: LEAN的QCAlgorithm实例（可选）
                       如果提供，将使用LEAN的indicators
                       如果不提供，将使用模拟数据或自己计算
+            llm_config: LLM配置（可选，TechnicalAgent不使用LLM）
         """
         super().__init__(
             name="technical-analysis-agent",
             description="Provides technical analysis using traditional indicators (RSI, MACD, MA, etc.)",
-            version="1.0.0"
+            version="1.0.0",
+            llm_config=llm_config,
+            enable_llm=False  # TechnicalAgent不使用LLM
         )
         
         self.algorithm = algorithm

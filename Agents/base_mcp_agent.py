@@ -26,6 +26,8 @@ import asyncio
 import logging
 import json
 
+from Agents.llm_config import get_default_llm, LLMConfig
+
 
 class BaseMCPAgent:
     """
@@ -61,7 +63,14 @@ class BaseMCPAgent:
     ```
     """
     
-    def __init__(self, name: str, description: str, version: str = "1.0.0"):
+    def __init__(
+        self, 
+        name: str, 
+        description: str, 
+        version: str = "1.0.0",
+        llm_config: Optional[LLMConfig] = None,
+        enable_llm: bool = True
+    ):
         """
         初始化MCP Agent
         
@@ -69,6 +78,8 @@ class BaseMCPAgent:
             name: Agent名称（标识符，应使用kebab-case）
             description: Agent功能描述
             version: Agent版本号
+            llm_config: LLM配置（如果为None且enable_llm=True，使用全局默认）
+            enable_llm: 是否启用LLM支持（默认True，但子类可选择不使用）
         """
         self.name = name
         self.description = description
@@ -81,10 +92,38 @@ class BaseMCPAgent:
         self.logger = logging.getLogger(f"MCP.{name}")
         self.logger.setLevel(logging.INFO)
         
+        # LLM支持（可选）
+        self._llm_client = None
+        if enable_llm:
+            try:
+                if llm_config:
+                    self._llm_client = llm_config.get_llm()
+                else:
+                    self._llm_client = get_default_llm()
+                self.logger.info(f"LLM enabled for {name}")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize LLM: {e}. Agent will work without LLM.")
+        
         # 注册MCP handlers
         self._register_handlers()
         
         self.logger.info(f"Initialized {name} v{version}")
+    
+    @property
+    def llm(self):
+        """
+        获取LLM客户端
+        
+        子类可以通过self.llm访问LLM，如果没有启用返回None
+        
+        Returns:
+            LLM客户端实例或None
+        """
+        return self._llm_client
+    
+    def has_llm(self) -> bool:
+        """检查是否有可用的LLM"""
+        return self._llm_client is not None
     
     def _register_handlers(self):
         """
