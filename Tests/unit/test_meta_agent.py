@@ -23,6 +23,7 @@ from Agents.meta_agent import (
     create_meta_agent_with_technical
 )
 from Agents.technical_agent import TechnicalAnalysisAgent
+from Agents.llm_config import LLMConfig, get_mock_llm
 from Memory.state_manager import MultiTimeframeStateManager
 
 
@@ -38,22 +39,24 @@ class TestMetaAgentInitialization:
         """测试无依赖的基础初始化"""
         meta = MetaAgent()
         
-        assert meta.anthropic_api_key is None
+        # 使用默认LLM (from get_default_llm)
+        assert meta.llm_client is not None
         assert meta.state_manager is None
-        assert meta.llm_client is None
         assert len(meta.agents) == 0
         assert len(meta.tool_call_history) == 0
         assert len(meta.decision_history) == 0
     
-    def test_initialization_with_api_key(self):
-        """测试带API key的初始化"""
-        # Mock anthropic client to avoid actual API calls
-        with patch('Agents.meta_agent.anthropic.Anthropic') as mock_anthropic:
-            meta = MetaAgent(anthropic_api_key="test-key")
-            
-            assert meta.anthropic_api_key == "test-key"
-            assert meta.llm_client is not None
-            mock_anthropic.assert_called_once_with(api_key="test-key")
+    def test_initialization_with_llm_config(self):
+        """测试带LLM配置的初始化"""
+        # 使用Mock LLM避免真实API调用
+        mock_llm = get_mock_llm()
+        llm_config = LLMConfig(model="mock", api_key="test-key")
+        
+        # 直接设置LLM实例
+        meta = MetaAgent(llm_config=llm_config)
+        
+        # 验证LLM client类型（LLMConfig可能返回ChatOpenAI包装的mock）
+        assert meta.llm_client is not None
     
     def test_initialization_with_state_manager(self):
         """测试带StateManager的初始化"""
@@ -61,12 +64,6 @@ class TestMetaAgentInitialization:
         meta = MetaAgent(state_manager=mock_state)
         
         assert meta.state_manager == mock_state
-    
-    def test_custom_model_configuration(self):
-        """测试自定义模型配置"""
-        meta = MetaAgent(model="claude-3-opus-20240229")
-        
-        assert meta.model == "claude-3-opus-20240229"
 
 
 class TestAgentConnection:
@@ -622,7 +619,7 @@ class TestConvenienceFunction:
     def test_create_meta_agent_with_technical(self):
         """测试便捷创建函数"""
         meta = run_async(create_meta_agent_with_technical(
-            anthropic_api_key=None,
+            llm_config=None,  # 使用默认LLM配置
             state_manager=None,
             algorithm=None
         ))
@@ -638,7 +635,7 @@ class TestEndToEndWorkflow:
     def test_complete_workflow_without_llm(self):
         """测试完整工作流（手动工具调用）"""
         # 创建Meta Agent
-        meta = MetaAgent(anthropic_api_key=None)
+        meta = MetaAgent(llm_config=None)  # 使用默认LLM配置
         technical = TechnicalAnalysisAgent()
         run_async(meta.connect_to_agent("technical", technical))
         

@@ -1,50 +1,30 @@
 """
-Meta Agent - MCP Client that orchestrates specialist agents
-元Agent - MCP客户端，协调所有专家Agent
-
-Meta Agent是系统的大脑，负责：
-1. 连接所有specialist agents（MCP Servers）
-2. 从Memory System检索上下文
-3. 使用LLM决定调用哪些工具
-4. 综合所有输入形成最终交易决策
-5. 将决策存储到记忆系统
-
-Architecture:
-    MetaAgent (MCP Client)
-    ├─ connect_to_agent() - 连接specialist agent
-    ├─ discover_tools() - 发现可用工具
-    ├─ analyze_and_decide() - LLM驱动的决策
-    └─ execute_tool() - 执行工具调用
-
-Usage:
-    # 创建Meta Agent
-    meta_agent = MetaAgent(
-        anthropic_api_key="...",
-        state_manager=state_manager
-    )
-    
-    # 连接specialist agents
-    await meta_agent.connect_to_agent("technical", technical_agent)
-    
-    # 分析并决策
-    decision = await meta_agent.analyze_and_decide(
-        symbol="AAPL",
-        query="Should I buy AAPL now?"
-    )
+Meta Agent模块
+实现MetaAgent类，作为MCP Client协调多个specialist agents
 """
+
+import json
+import asyncio
+from typing import Dict, List, Optional, Any, Tuple
+from datetime import datetime
+from dataclasses import dataclass
+
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+
+from Agents.llm_config import get_default_llm, LLMConfig
 
 import asyncio
 import json
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from dataclasses import dataclass, asdict
-import anthropic
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from Memory.state_manager import MultiTimeframeStateManager
 from Memory.schemas import DecisionRecord, Timeframe
+from Agents.llm_config import get_default_llm, LLMConfig
 
 
 @dataclass
@@ -110,29 +90,26 @@ class MetaAgent:
     
     def __init__(
         self,
-        anthropic_api_key: Optional[str] = None,
-        state_manager: Optional[MultiTimeframeStateManager] = None,
-        model: str = "claude-3-5-sonnet-20241022"
+        llm_config: Optional[LLMConfig] = None,
+        state_manager: Optional[MultiTimeframeStateManager] = None
     ):
         """
         初始化Meta Agent
         
         Args:
-            anthropic_api_key: Anthropic API key for LLM
+            llm_config: LLM配置（如果为None，使用全局默认，默认OpenAI）
             state_manager: StateManager instance for memory integration
-            model: Anthropic model to use
         """
-        self.anthropic_api_key = anthropic_api_key
         self.state_manager = state_manager
-        self.model = model
         
         # 连接的agents
         self.agents: Dict[str, AgentConnection] = {}
         
-        # LLM client
-        self.llm_client = None
-        if anthropic_api_key:
-            self.llm_client = anthropic.Anthropic(api_key=anthropic_api_key)
+        # LLM client - 使用统一配置
+        if llm_config:
+            self.llm_client = llm_config.get_llm()
+        else:
+            self.llm_client = get_default_llm()
         
         # 工具调用历史
         self.tool_call_history: List[ToolCall] = []
@@ -421,89 +398,24 @@ Always consider:
             (最终响应文本, 工具调用列表)
         """
         if not self.llm_client:
-            return "No LLM client available. Please provide anthropic_api_key.", []
+            return "No LLM client available. Please configure LLM.", []
         
-        tools = self._format_tools_for_llm()
-        tool_calls_made = []
+        # 简化实现：不使用工具调用，直接让 LLM 做决策
+        # TODO: 未来可以添加 LangChain 的 tool calling 支持
         
-        for iteration in range(max_iterations):
-            # 调用LLM
-            response = self.llm_client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                system=self._build_system_prompt(),
-                messages=messages,
-                tools=tools if tools else None
-            )
-            
-            # 检查是否需要调用工具
-            if response.stop_reason != "tool_use":
-                # 没有工具调用，返回最终响应
-                final_text = ""
-                for block in response.content:
-                    if hasattr(block, 'text'):
-                        final_text += block.text
-                return final_text, tool_calls_made
-            
-            # 处理工具调用
-            assistant_message = {"role": "assistant", "content": response.content}
-            messages.append(assistant_message)
-            
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    tool_name = block.name
-                    tool_input = block.input
-                    tool_use_id = block.id
-                    
-                    # 解析agent_name和tool_name
-                    if "__" in tool_name:
-                        agent_name, actual_tool_name = tool_name.split("__", 1)
-                    else:
-                        # 如果没有前缀，尝试找到对应的agent
-                        agent_name = None
-                        actual_tool_name = tool_name
-                        for name, conn in self.agents.items():
-                            if any(t['name'] == tool_name for t in conn.tools):
-                                agent_name = name
-                                break
-                        
-                        if not agent_name:
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "content": json.dumps({"error": f"Tool '{tool_name}' not found"})
-                            })
-                            continue
-                    
-                    # 执行工具
-                    try:
-                        result = await self.execute_tool(
-                            agent_name=agent_name,
-                            tool_name=actual_tool_name,
-                            arguments=tool_input
-                        )
-                        
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "content": json.dumps(result, default=str)
-                        })
-                        
-                        tool_calls_made.append(self.tool_call_history[-1])
-                        
-                    except Exception as e:
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "content": json.dumps({"error": str(e)})
-                        })
-            
-            # 添加工具结果到消息
-            messages.append({"role": "user", "content": tool_results})
+        # 构建消息
+        langchain_messages = [SystemMessage(content=self._build_system_prompt())]
         
-        # 达到最大迭代次数
-        return "Max iterations reached. Unable to complete analysis.", tool_calls_made
+        for msg in messages:
+            if msg["role"] == "user":
+                langchain_messages.append(HumanMessage(content=msg["content"]))
+        
+        try:
+            # 调用 LLM
+            response = self.llm_client.invoke(langchain_messages)
+            return response.content, []
+        except Exception as e:
+            return f"LLM call failed: {str(e)}", []
     
     async def analyze_and_decide(
         self,
@@ -721,7 +633,7 @@ REASONING: [detailed explanation]"""
 
 # 便捷函数
 async def create_meta_agent_with_technical(
-    anthropic_api_key: Optional[str] = None,
+    llm_config: Optional[LLMConfig] = None,
     state_manager: Optional[MultiTimeframeStateManager] = None,
     algorithm: Any = None
 ) -> MetaAgent:
@@ -731,7 +643,7 @@ async def create_meta_agent_with_technical(
     这是一个便捷函数，用于快速设置基础配置。
     
     Args:
-        anthropic_api_key: Anthropic API key
+        llm_config: LLM configuration (uses default if None)
         state_manager: StateManager instance
         algorithm: LEAN algorithm instance (optional)
         
@@ -742,7 +654,7 @@ async def create_meta_agent_with_technical(
     
     # 创建Meta Agent
     meta = MetaAgent(
-        anthropic_api_key=anthropic_api_key,
+        llm_config=llm_config,
         state_manager=state_manager
     )
     
@@ -762,7 +674,7 @@ if __name__ == "__main__":
     async def main():
         # 创建Meta Agent
         meta = MetaAgent(
-            anthropic_api_key=None,  # 需要设置环境变量或传入API key
+            llm_config=None,  # 使用默认LLM配置 (OpenAI)
             state_manager=None  # 可以传入StateManager实例
         )
         

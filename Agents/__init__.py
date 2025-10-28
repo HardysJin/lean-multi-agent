@@ -7,6 +7,7 @@ Agents Module - MCP-based Multi-Agent System
 - news_agent: 新闻分析Agent (MCP Server, 可选)
 - meta_agent: Meta Agent (MCP Client)
 - prompt_builder: Prompt构建工具
+- llm_config: 统一LLM配置管理
 
 Legacy (Old Implementation):
 - base_agent: Agent基类 (旧版)
@@ -16,6 +17,11 @@ Legacy (Old Implementation):
 from .base_mcp_agent import BaseMCPAgent, ExampleAgent
 from .technical_agent import TechnicalAnalysisAgent
 from .meta_agent import MetaAgent, MetaDecision, ToolCall, create_meta_agent_with_technical
+from .llm_config import (
+    LLMConfig, LLMProvider,
+    get_default_llm, get_default_llm_config, set_default_llm_config,
+    create_llm, get_available_providers, get_mock_llm
+)
 
 __all__ = [
     # MCP-based Agents
@@ -26,4 +32,14 @@ __all__ = [
     'MetaDecision',
     'ToolCall',
     'create_meta_agent_with_technical',
+    
+    # LLM Configuration
+    'LLMConfig',
+    'LLMProvider',
+    'get_default_llm',
+    'get_default_llm_config',
+    'set_default_llm_config',
+    'create_llm',
+    'get_available_providers',
+    'get_mock_llm',
 ]
