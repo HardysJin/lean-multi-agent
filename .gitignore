@@ -1,10 +1,14 @@
 .env
 Results/
 Logs/
-Data/cache/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Data directories
+Data/vector_db/
+Data/sql/
+Data/cache/
 
 # LEAN 自动生成
 storage/
