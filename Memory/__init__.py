@@ -27,6 +27,11 @@ from .sql_store import (
     create_sql_store,
 )
 
+from .state_manager import (
+    MultiTimeframeStateManager,
+    create_state_manager,
+)
+
 __all__ = [
     'Timeframe',
     'DecisionRecord',
@@ -38,4 +43,6 @@ __all__ = [
     'create_vector_store',
     'SQLStore',
     'create_sql_store',
+    'MultiTimeframeStateManager',
+    'create_state_manager',
 ]
