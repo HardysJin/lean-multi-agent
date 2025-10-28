@@ -17,6 +17,11 @@ from .schemas import (
     create_memory_id,
 )
 
+from .vector_store import (
+    VectorStore,
+    create_vector_store,
+)
+
 __all__ = [
     'Timeframe',
     'DecisionRecord',
@@ -24,4 +29,6 @@ __all__ = [
     'HierarchicalConstraints',
     'create_decision_id',
     'create_memory_id',
+    'VectorStore',
+    'create_vector_store',
 ]
