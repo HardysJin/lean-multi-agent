@@ -14,9 +14,11 @@ Legacy (Old Implementation):
 """
 
 from .base_mcp_agent import BaseMCPAgent, ExampleAgent
+from .technical_agent import TechnicalAnalysisAgent
 
 __all__ = [
     # MCP-based Agents
     'BaseMCPAgent',
     'ExampleAgent',
+    'TechnicalAnalysisAgent',
 ]
