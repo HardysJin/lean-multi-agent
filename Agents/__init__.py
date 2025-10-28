@@ -15,10 +15,15 @@ Legacy (Old Implementation):
 
 from .base_mcp_agent import BaseMCPAgent, ExampleAgent
 from .technical_agent import TechnicalAnalysisAgent
+from .meta_agent import MetaAgent, MetaDecision, ToolCall, create_meta_agent_with_technical
 
 __all__ = [
     # MCP-based Agents
     'BaseMCPAgent',
     'ExampleAgent',
     'TechnicalAnalysisAgent',
+    'MetaAgent',
+    'MetaDecision',
+    'ToolCall',
+    'create_meta_agent_with_technical',
 ]

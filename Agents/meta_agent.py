@@ -1,0 +1,799 @@
+"""
+Meta Agent - MCP Client that orchestrates specialist agents
+元Agent - MCP客户端，协调所有专家Agent
+
+Meta Agent是系统的大脑，负责：
+1. 连接所有specialist agents（MCP Servers）
+2. 从Memory System检索上下文
+3. 使用LLM决定调用哪些工具
+4. 综合所有输入形成最终交易决策
+5. 将决策存储到记忆系统
+
+Architecture:
+    MetaAgent (MCP Client)
+    ├─ connect_to_agent() - 连接specialist agent
+    ├─ discover_tools() - 发现可用工具
+    ├─ analyze_and_decide() - LLM驱动的决策
+    └─ execute_tool() - 执行工具调用
+
+Usage:
+    # 创建Meta Agent
+    meta_agent = MetaAgent(
+        anthropic_api_key="...",
+        state_manager=state_manager
+    )
+    
+    # 连接specialist agents
+    await meta_agent.connect_to_agent("technical", technical_agent)
+    
+    # 分析并决策
+    decision = await meta_agent.analyze_and_decide(
+        symbol="AAPL",
+        query="Should I buy AAPL now?"
+    )
+"""
+
+import asyncio
+import json
+from typing import Dict, List, Any, Optional, Tuple
+from datetime import datetime
+from dataclasses import dataclass, asdict
+import anthropic
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+from Memory.state_manager import MultiTimeframeStateManager
+from Memory.schemas import DecisionRecord, Timeframe
+
+
+@dataclass
+class AgentConnection:
+    """Specialist agent连接信息"""
+    name: str
+    session: ClientSession
+    tools: List[Dict[str, Any]]
+    resources: List[Dict[str, Any]]
+    description: str
+
+
+@dataclass
+class ToolCall:
+    """工具调用记录"""
+    agent_name: str
+    tool_name: str
+    arguments: Dict[str, Any]
+    result: Any
+    timestamp: datetime
+    execution_time_ms: float
+
+
+@dataclass
+class MetaDecision:
+    """Meta Agent的最终决策"""
+    symbol: str
+    action: str  # BUY, SELL, HOLD
+    conviction: int  # 1-10
+    reasoning: str
+    evidence: Dict[str, Any]  # 来自各个agent的证据
+    tool_calls: List[ToolCall]
+    timestamp: datetime
+    
+    def to_decision_record(self, timeframe: Timeframe = Timeframe.TACTICAL) -> DecisionRecord:
+        """转换为DecisionRecord用于存储到Memory System"""
+        return DecisionRecord(
+            id=f"META_{self.symbol}_{self.timestamp.strftime('%Y%m%d_%H%M%S')}",
+            timestamp=self.timestamp,
+            timeframe=timeframe,
+            symbol=self.symbol,
+            action=self.action,
+            quantity=0,  # 需要根据conviction计算
+            price=0.0,  # 需要从evidence中提取
+            reasoning=self.reasoning,
+            agent_name="meta_agent",
+            conviction=float(self.conviction),
+            metadata={
+                'evidence': self.evidence,
+                'tool_calls_count': len(self.tool_calls),
+                'agents_consulted': list(set(tc.agent_name for tc in self.tool_calls))
+            }
+        )
+
+
+class MetaAgent:
+    """
+    Meta Agent - MCP Client
+    
+    作为MCP Client连接所有specialist agents，协调工具调用，
+    使用LLM进行智能决策，集成Memory System。
+    """
+    
+    def __init__(
+        self,
+        anthropic_api_key: Optional[str] = None,
+        state_manager: Optional[MultiTimeframeStateManager] = None,
+        model: str = "claude-3-5-sonnet-20241022"
+    ):
+        """
+        初始化Meta Agent
+        
+        Args:
+            anthropic_api_key: Anthropic API key for LLM
+            state_manager: StateManager instance for memory integration
+            model: Anthropic model to use
+        """
+        self.anthropic_api_key = anthropic_api_key
+        self.state_manager = state_manager
+        self.model = model
+        
+        # 连接的agents
+        self.agents: Dict[str, AgentConnection] = {}
+        
+        # LLM client
+        self.llm_client = None
+        if anthropic_api_key:
+            self.llm_client = anthropic.Anthropic(api_key=anthropic_api_key)
+        
+        # 工具调用历史
+        self.tool_call_history: List[ToolCall] = []
+        
+        # 决策历史
+        self.decision_history: List[MetaDecision] = []
+    
+    async def connect_to_agent(
+        self,
+        agent_name: str,
+        agent_instance: Any,
+        description: str = ""
+    ) -> None:
+        """
+        连接到specialist agent (in-process connection)
+        
+        对于in-process的agents，直接使用其暴露的工具和资源。
+        
+        Args:
+            agent_name: Agent名称
+            agent_instance: Agent实例（如TechnicalAnalysisAgent）
+            description: Agent描述
+        """
+        # 获取agent的工具和资源
+        tools = agent_instance.get_tools() if hasattr(agent_instance, 'get_tools') else []
+        resources = agent_instance.get_resources() if hasattr(agent_instance, 'get_resources') else []
+        
+        # 转换为字典格式便于处理
+        tools_dict = [
+            {
+                'name': tool.name,
+                'description': tool.description,
+                'inputSchema': tool.inputSchema
+            }
+            for tool in tools
+        ]
+        
+        resources_dict = [
+            {
+                'uri': str(resource.uri),
+                'name': resource.name,
+                'description': resource.description,
+                'mimeType': resource.mimeType
+            }
+            for resource in resources
+        ]
+        
+        # 创建连接（in-process模式，session就是agent实例本身）
+        connection = AgentConnection(
+            name=agent_name,
+            session=agent_instance,  # 直接存储agent实例
+            tools=tools_dict,
+            resources=resources_dict,
+            description=description or getattr(agent_instance, 'description', '')
+        )
+        
+        self.agents[agent_name] = connection
+        print(f"✓ Connected to agent: {agent_name} ({len(tools_dict)} tools, {len(resources_dict)} resources)")
+    
+    def get_all_tools(self) -> List[Dict[str, Any]]:
+        """
+        获取所有可用工具
+        
+        Returns:
+            所有agents的工具列表，每个工具包含agent_name
+        """
+        all_tools = []
+        for agent_name, connection in self.agents.items():
+            for tool in connection.tools:
+                tool_with_agent = tool.copy()
+                tool_with_agent['agent_name'] = agent_name
+                all_tools.append(tool_with_agent)
+        return all_tools
+    
+    async def execute_tool(
+        self,
+        agent_name: str,
+        tool_name: str,
+        arguments: Dict[str, Any]
+    ) -> Any:
+        """
+        执行specialist agent的工具
+        
+        Args:
+            agent_name: Agent名称
+            tool_name: 工具名称
+            arguments: 工具参数
+            
+        Returns:
+            工具执行结果
+            
+        Raises:
+            ValueError: 如果agent或tool不存在
+        """
+        if agent_name not in self.agents:
+            raise ValueError(f"Agent '{agent_name}' not connected")
+        
+        connection = self.agents[agent_name]
+        agent_instance = connection.session  # 获取agent实例
+        
+        # 验证工具存在
+        tool_exists = any(t['name'] == tool_name for t in connection.tools)
+        if not tool_exists:
+            raise ValueError(f"Tool '{tool_name}' not found in agent '{agent_name}'")
+        
+        # 执行工具
+        start_time = datetime.now()
+        try:
+            result = await agent_instance.handle_tool_call(tool_name, arguments)
+            execution_time = (datetime.now() - start_time).total_seconds() * 1000
+            
+            # 记录工具调用
+            tool_call = ToolCall(
+                agent_name=agent_name,
+                tool_name=tool_name,
+                arguments=arguments,
+                result=result,
+                timestamp=start_time,
+                execution_time_ms=execution_time
+            )
+            self.tool_call_history.append(tool_call)
+            
+            return result
+        except Exception as e:
+            execution_time = (datetime.now() - start_time).total_seconds() * 1000
+            error_result = {"error": str(e)}
+            
+            # 记录失败的调用
+            tool_call = ToolCall(
+                agent_name=agent_name,
+                tool_name=tool_name,
+                arguments=arguments,
+                result=error_result,
+                timestamp=start_time,
+                execution_time_ms=execution_time
+            )
+            self.tool_call_history.append(tool_call)
+            
+            raise
+    
+    async def read_resource(
+        self,
+        agent_name: str,
+        resource_uri: str
+    ) -> Any:
+        """
+        读取specialist agent的资源
+        
+        Args:
+            agent_name: Agent名称
+            resource_uri: 资源URI
+            
+        Returns:
+            资源内容
+            
+        Raises:
+            ValueError: 如果agent不存在
+        """
+        if agent_name not in self.agents:
+            raise ValueError(f"Agent '{agent_name}' not connected")
+        
+        connection = self.agents[agent_name]
+        agent_instance = connection.session
+        
+        # 读取资源
+        result = await agent_instance.handle_resource_read(resource_uri)
+        return result
+    
+    def _retrieve_memory_context(
+        self,
+        symbol: str,
+        lookback_hours: int = 24
+    ) -> Dict[str, Any]:
+        """
+        从Memory System检索上下文
+        
+        Args:
+            symbol: 交易标的
+            lookback_hours: 回溯时间（小时）
+            
+        Returns:
+            记忆上下文字典
+        """
+        if not self.state_manager:
+            return {
+                "note": "No state manager available",
+                "recent_decisions": []
+            }
+        
+        try:
+            # 获取近期决策（直接从sql_store）
+            recent_decisions = self.state_manager.sql_store.get_recent_decisions(
+                symbol=symbol,
+                limit=5
+            )
+            
+            # TODO: 实现从向量存储检索相似市场决策
+            # similar_events = self.state_manager.get_similar_past_decisions(...)
+            
+            return {
+                "recent_decisions": [
+                    {
+                        "action": d.action,
+                        "confidence": d.confidence_score,
+                        "reasoning": d.reasoning,
+                        "timestamp": d.timestamp.isoformat(),
+                        "timeframe": str(d.timeframe)
+                    }
+                    for d in recent_decisions
+                ]
+            }
+        except Exception as e:
+            return {
+                "error": f"Failed to retrieve memory: {str(e)}",
+                "recent_decisions": []
+            }
+    
+    def _build_system_prompt(self) -> str:
+        """构建系统提示"""
+        agents_info = "\n".join([
+            f"- {name}: {conn.description} ({len(conn.tools)} tools)"
+            for name, conn in self.agents.items()
+        ])
+        
+        return f"""You are a Meta Agent coordinating multiple specialist agents for quantitative trading.
+
+Connected Agents:
+{agents_info}
+
+Your role:
+1. Analyze the current situation and available context
+2. Decide which specialist agents to consult
+3. Call appropriate tools to gather information
+4. Synthesize all inputs into a final trading decision
+5. Provide clear reasoning for your decision
+
+Trading Actions:
+- BUY: Strong evidence to enter long position
+- SELL: Strong evidence to exit or enter short position  
+- HOLD: Insufficient evidence or conflicting signals
+
+Conviction Score (1-10):
+- 1-3: Low conviction, weak signals
+- 4-6: Moderate conviction, some supporting evidence
+- 7-8: High conviction, strong evidence from multiple sources
+- 9-10: Very high conviction, overwhelming evidence
+
+Always consider:
+- Multiple timeframes and perspectives
+- Risk management principles
+- Historical context from memory
+- Confluence of signals from different agents"""
+    
+    def _format_tools_for_llm(self) -> List[Dict[str, Any]]:
+        """
+        将工具格式化为Anthropic tool calling格式
+        
+        Returns:
+            Anthropic工具定义列表
+        """
+        tools = []
+        for agent_name, connection in self.agents.items():
+            for tool in connection.tools:
+                # Anthropic tool格式
+                anthropic_tool = {
+                    "name": f"{agent_name}__{tool['name']}",  # 加上agent前缀避免冲突
+                    "description": f"[{agent_name}] {tool['description']}",
+                    "input_schema": tool['inputSchema']
+                }
+                tools.append(anthropic_tool)
+        return tools
+    
+    async def _call_llm_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        max_iterations: int = 5
+    ) -> Tuple[str, List[ToolCall]]:
+        """
+        调用LLM，支持工具调用
+        
+        Args:
+            messages: 对话消息
+            max_iterations: 最大迭代次数（防止无限循环）
+            
+        Returns:
+            (最终响应文本, 工具调用列表)
+        """
+        if not self.llm_client:
+            return "No LLM client available. Please provide anthropic_api_key.", []
+        
+        tools = self._format_tools_for_llm()
+        tool_calls_made = []
+        
+        for iteration in range(max_iterations):
+            # 调用LLM
+            response = self.llm_client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                system=self._build_system_prompt(),
+                messages=messages,
+                tools=tools if tools else None
+            )
+            
+            # 检查是否需要调用工具
+            if response.stop_reason != "tool_use":
+                # 没有工具调用，返回最终响应
+                final_text = ""
+                for block in response.content:
+                    if hasattr(block, 'text'):
+                        final_text += block.text
+                return final_text, tool_calls_made
+            
+            # 处理工具调用
+            assistant_message = {"role": "assistant", "content": response.content}
+            messages.append(assistant_message)
+            
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    tool_name = block.name
+                    tool_input = block.input
+                    tool_use_id = block.id
+                    
+                    # 解析agent_name和tool_name
+                    if "__" in tool_name:
+                        agent_name, actual_tool_name = tool_name.split("__", 1)
+                    else:
+                        # 如果没有前缀，尝试找到对应的agent
+                        agent_name = None
+                        actual_tool_name = tool_name
+                        for name, conn in self.agents.items():
+                            if any(t['name'] == tool_name for t in conn.tools):
+                                agent_name = name
+                                break
+                        
+                        if not agent_name:
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": json.dumps({"error": f"Tool '{tool_name}' not found"})
+                            })
+                            continue
+                    
+                    # 执行工具
+                    try:
+                        result = await self.execute_tool(
+                            agent_name=agent_name,
+                            tool_name=actual_tool_name,
+                            arguments=tool_input
+                        )
+                        
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": json.dumps(result, default=str)
+                        })
+                        
+                        tool_calls_made.append(self.tool_call_history[-1])
+                        
+                    except Exception as e:
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": json.dumps({"error": str(e)})
+                        })
+            
+            # 添加工具结果到消息
+            messages.append({"role": "user", "content": tool_results})
+        
+        # 达到最大迭代次数
+        return "Max iterations reached. Unable to complete analysis.", tool_calls_made
+    
+    async def analyze_and_decide(
+        self,
+        symbol: str,
+        query: Optional[str] = None,
+        additional_context: Optional[Dict[str, Any]] = None
+    ) -> MetaDecision:
+        """
+        分析并做出交易决策
+        
+        这是Meta Agent的核心方法：
+        1. 从Memory System检索上下文
+        2. 使用LLM分析situation
+        3. LLM决定调用哪些specialist工具
+        4. 综合所有信息形成最终决策
+        
+        Args:
+            symbol: 交易标的
+            query: 可选的具体问题（如"Should I buy AAPL?"）
+            additional_context: 额外的上下文信息
+            
+        Returns:
+            MetaDecision对象
+        """
+        # 1. 检索记忆上下文
+        memory_context = self._retrieve_memory_context(symbol)
+        
+        # 2. 构建初始消息
+        context_str = json.dumps({
+            "symbol": symbol,
+            "memory": memory_context,
+            "additional": additional_context or {}
+        }, indent=2, default=str)
+        
+        user_message = f"""Analyze the trading opportunity for {symbol}.
+
+Context:
+{context_str}
+
+{'Question: ' + query if query else ''}
+
+Please:
+1. Use available tools to gather current market data and analysis
+2. Consider historical context from memory
+3. Synthesize all information
+4. Provide a clear trading decision (BUY/SELL/HOLD) with conviction (1-10)
+5. Explain your reasoning
+
+Format your final decision as:
+ACTION: [BUY/SELL/HOLD]
+CONVICTION: [1-10]
+REASONING: [detailed explanation]"""
+        
+        messages = [{"role": "user", "content": user_message}]
+        
+        # 3. 调用LLM（可能包含多轮工具调用）
+        final_response, tool_calls = await self._call_llm_with_tools(messages)
+        
+        # 4. 解析决策
+        decision = self._parse_decision(
+            symbol=symbol,
+            response=final_response,
+            tool_calls=tool_calls
+        )
+        
+        # 5. 存储到记忆系统
+        if self.state_manager:
+            try:
+                decision_record = decision.to_decision_record()
+                self.state_manager.store_decision(decision_record)
+            except Exception as e:
+                print(f"Warning: Failed to store decision in memory: {e}")
+        
+        # 6. 记录到历史
+        self.decision_history.append(decision)
+        
+        return decision
+    
+    def _parse_decision(
+        self,
+        symbol: str,
+        response: str,
+        tool_calls: List[ToolCall]
+    ) -> MetaDecision:
+        """
+        从LLM响应中解析决策
+        
+        Args:
+            symbol: 交易标的
+            response: LLM响应文本
+            tool_calls: 执行的工具调用
+            
+        Returns:
+            MetaDecision对象
+        """
+        # 提取ACTION
+        action = "HOLD"  # 默认
+        for line in response.split('\n'):
+            if line.strip().startswith("ACTION:"):
+                action_text = line.split("ACTION:", 1)[1].strip()
+                if "BUY" in action_text.upper():
+                    action = "BUY"
+                elif "SELL" in action_text.upper():
+                    action = "SELL"
+                else:
+                    action = "HOLD"
+                break
+        
+        # 提取CONVICTION
+        conviction = 5  # 默认
+        for line in response.split('\n'):
+            if line.strip().startswith("CONVICTION:"):
+                conviction_text = line.split("CONVICTION:", 1)[1].strip()
+                try:
+                    conviction = int(conviction_text.split()[0])
+                    conviction = max(1, min(10, conviction))  # 限制在1-10
+                except (ValueError, IndexError):
+                    conviction = 5
+                break
+        
+        # 提取REASONING
+        reasoning_lines = []
+        in_reasoning = False
+        for line in response.split('\n'):
+            if line.strip().startswith("REASONING:"):
+                reasoning_lines.append(line.split("REASONING:", 1)[1].strip())
+                in_reasoning = True
+            elif in_reasoning:
+                if line.strip() and not line.strip().startswith(("ACTION:", "CONVICTION:")):
+                    reasoning_lines.append(line.strip())
+        
+        reasoning = " ".join(reasoning_lines) if reasoning_lines else response
+        
+        # 收集证据
+        evidence = {
+            "raw_response": response,
+            "tools_used": [
+                {
+                    "agent": tc.agent_name,
+                    "tool": tc.tool_name,
+                    "result_summary": str(tc.result)[:200] + "..." if len(str(tc.result)) > 200 else str(tc.result)
+                }
+                for tc in tool_calls
+            ]
+        }
+        
+        return MetaDecision(
+            symbol=symbol,
+            action=action,
+            conviction=conviction,
+            reasoning=reasoning,
+            evidence=evidence,
+            tool_calls=tool_calls,
+            timestamp=datetime.now()
+        )
+    
+    def get_agent_info(self, agent_name: str) -> Optional[Dict[str, Any]]:
+        """
+        获取agent信息
+        
+        Args:
+            agent_name: Agent名称
+            
+        Returns:
+            Agent信息字典，如果不存在返回None
+        """
+        if agent_name not in self.agents:
+            return None
+        
+        conn = self.agents[agent_name]
+        return {
+            "name": conn.name,
+            "description": conn.description,
+            "tools": conn.tools,
+            "resources": conn.resources
+        }
+    
+    def list_agents(self) -> List[str]:
+        """获取所有连接的agent名称"""
+        return list(self.agents.keys())
+    
+    def get_tool_call_history(self, limit: Optional[int] = None) -> List[ToolCall]:
+        """
+        获取工具调用历史
+        
+        Args:
+            limit: 返回的最大数量
+            
+        Returns:
+            工具调用列表
+        """
+        if limit:
+            return self.tool_call_history[-limit:]
+        return self.tool_call_history
+    
+    def get_decision_history(self, limit: Optional[int] = None) -> List[MetaDecision]:
+        """
+        获取决策历史
+        
+        Args:
+            limit: 返回的最大数量
+            
+        Returns:
+            决策列表
+        """
+        if limit:
+            return self.decision_history[-limit:]
+        return self.decision_history
+    
+    def clear_history(self) -> None:
+        """清空历史记录"""
+        self.tool_call_history.clear()
+        self.decision_history.clear()
+
+
+# 便捷函数
+async def create_meta_agent_with_technical(
+    anthropic_api_key: Optional[str] = None,
+    state_manager: Optional[MultiTimeframeStateManager] = None,
+    algorithm: Any = None
+) -> MetaAgent:
+    """
+    创建Meta Agent并连接Technical Agent
+    
+    这是一个便捷函数，用于快速设置基础配置。
+    
+    Args:
+        anthropic_api_key: Anthropic API key
+        state_manager: StateManager instance
+        algorithm: LEAN algorithm instance (optional)
+        
+    Returns:
+        配置好的MetaAgent实例
+    """
+    from Agents.technical_agent import TechnicalAnalysisAgent
+    
+    # 创建Meta Agent
+    meta = MetaAgent(
+        anthropic_api_key=anthropic_api_key,
+        state_manager=state_manager
+    )
+    
+    # 创建并连接Technical Agent
+    technical = TechnicalAnalysisAgent(algorithm=algorithm)
+    await meta.connect_to_agent(
+        agent_name="technical",
+        agent_instance=technical,
+        description="Technical analysis specialist providing indicators, signals, patterns, and support/resistance levels"
+    )
+    
+    return meta
+
+
+if __name__ == "__main__":
+    # 示例用法
+    async def main():
+        # 创建Meta Agent
+        meta = MetaAgent(
+            anthropic_api_key=None,  # 需要设置环境变量或传入API key
+            state_manager=None  # 可以传入StateManager实例
+        )
+        
+        # 连接Technical Agent
+        from Agents.technical_agent import TechnicalAnalysisAgent
+        technical = TechnicalAnalysisAgent(algorithm=None)
+        await meta.connect_to_agent(
+            agent_name="technical",
+            agent_instance=technical,
+            description="Technical analysis specialist"
+        )
+        
+        # 查看可用工具
+        print("Available tools:")
+        for tool in meta.get_all_tools():
+            print(f"  - {tool['agent_name']}.{tool['name']}: {tool['description']}")
+        
+        # 执行工具
+        result = await meta.execute_tool(
+            agent_name="technical",
+            tool_name="calculate_indicators",
+            arguments={"symbol": "AAPL"}
+        )
+        print(f"\nTool result: {json.dumps(result, indent=2, default=str)}")
+        
+        # 如果有API key，可以进行完整决策
+        # decision = await meta.analyze_and_decide(
+        #     symbol="AAPL",
+        #     query="Should I buy AAPL based on technical analysis?"
+        # )
+        # print(f"\nDecision: {decision.action} (conviction: {decision.conviction})")
+        # print(f"Reasoning: {decision.reasoning}")
+    
+    asyncio.run(main())
