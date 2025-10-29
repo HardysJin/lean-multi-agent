@@ -27,6 +27,10 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
 import asyncio
 
+# 加载环境变量
+from dotenv import load_dotenv
+load_dotenv()
+
 try:
     from newsapi import NewsApiClient
     NEWSAPI_AVAILABLE = True
@@ -334,7 +338,7 @@ class NewsAgent(BaseMCPAgent):
                 from_param=from_date.strftime('%Y-%m-%d'),
                 to=to_date.strftime('%Y-%m-%d'),
                 language='en',
-                sort_by='publishedAt',
+                sort_by='popularity', # relevancy, popularity, publishedAt
                 page_size=limit
             )
             
@@ -708,7 +712,7 @@ Provide a concise summary (2-3 sentences) covering:
             response = self.news_client.get_everything(
                 q=keyword,
                 language='en',
-                sort_by='publishedAt',
+                sort_by='popularity', # relevancy, popularity, publishedAt
                 page_size=limit
             )
             

@@ -91,16 +91,27 @@ class MetaAgent:
     def __init__(
         self,
         llm_config: Optional[LLMConfig] = None,
-        state_manager: Optional[MultiTimeframeStateManager] = None
+        state_manager: Optional[MultiTimeframeStateManager] = None,
+        enable_memory: bool = True
     ):
         """
         初始化Meta Agent
         
         Args:
             llm_config: LLM配置（如果为None，使用全局默认，默认OpenAI）
-            state_manager: StateManager instance for memory integration
+            state_manager: StateManager instance for memory integration (如果为None且enable_memory=True，会自动创建)
+            enable_memory: 是否启用Memory System（默认True）
         """
-        self.state_manager = state_manager
+        # Memory System - 默认启用
+        if enable_memory and state_manager is None:
+            # 自动创建默认的state_manager
+            self.state_manager = MultiTimeframeStateManager(
+                sql_db_path="Data/sql/trading_memory.db",
+                vector_db_path="Data/vector_db/chroma"
+            )
+            print("✓ Memory System自动启用 (Data/sql/trading_memory.db)")
+        else:
+            self.state_manager = state_manager
         
         # 连接的agents
         self.agents: Dict[str, AgentConnection] = {}
@@ -388,7 +399,7 @@ Always consider:
         max_iterations: int = 5
     ) -> Tuple[str, List[ToolCall]]:
         """
-        调用LLM，支持工具调用
+        调用LLM，支持工具调用 (使用LangChain的tool binding)
         
         Args:
             messages: 对话消息
@@ -400,22 +411,211 @@ Always consider:
         if not self.llm_client:
             return "No LLM client available. Please configure LLM.", []
         
-        # 简化实现：不使用工具调用，直接让 LLM 做决策
-        # TODO: 未来可以添加 LangChain 的 tool calling 支持
+        # 使用 LangChain 的 tool calling 支持
+        from langchain_core.tools import tool
+        from langchain_core.messages import AIMessage, ToolMessage
         
-        # 构建消息
+        tool_calls_made = []
+        
+        # 将我们的工具转换为LangChain工具格式
+        langchain_tools = self._create_langchain_tools()
+        
+        if not langchain_tools:
+            # 如果没有工具，直接调用LLM
+            langchain_messages = [SystemMessage(content=self._build_system_prompt())]
+            for msg in messages:
+                if msg["role"] == "user":
+                    langchain_messages.append(HumanMessage(content=msg["content"]))
+            
+            try:
+                response = self.llm_client.invoke(langchain_messages)
+                return response.content, []
+            except Exception as e:
+                return f"LLM call failed: {str(e)}", []
+        
+        # 绑定工具到LLM
+        try:
+            llm_with_tools = self.llm_client.bind_tools(langchain_tools)
+        except AttributeError:
+            # 如果LLM不支持bind_tools（如MockLLM），回退到简单模式
+            langchain_messages = [SystemMessage(content=self._build_system_prompt())]
+            for msg in messages:
+                if msg["role"] == "user":
+                    langchain_messages.append(HumanMessage(content=msg["content"]))
+            
+            try:
+                response = self.llm_client.invoke(langchain_messages)
+                return response.content, []
+            except Exception as e:
+                return f"LLM call failed: {str(e)}", []
+        
+        # 构建初始消息
         langchain_messages = [SystemMessage(content=self._build_system_prompt())]
-        
         for msg in messages:
             if msg["role"] == "user":
                 langchain_messages.append(HumanMessage(content=msg["content"]))
         
+        # 迭代调用，支持多轮工具调用
+        for iteration in range(max_iterations):
+            try:
+                # 调用LLM
+                response = llm_with_tools.invoke(langchain_messages)
+                
+                # 检查是否有工具调用
+                if not hasattr(response, 'tool_calls') or not response.tool_calls:
+                    # 没有工具调用，返回最终响应
+                    return response.content, tool_calls_made
+                
+                # 添加AI响应到消息历史
+                langchain_messages.append(response)
+                
+                # 执行工具调用
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call['name']
+                    tool_args = tool_call['args']
+                    tool_id = tool_call.get('id', f'call_{iteration}')
+                    
+                    # 解析agent_name和actual_tool_name
+                    if "__" in tool_name:
+                        agent_name, actual_tool_name = tool_name.split("__", 1)
+                    else:
+                        # 尝试查找工具所属的agent
+                        agent_name = None
+                        for name, conn in self.agents.items():
+                            if any(t['name'] == tool_name for t in conn.tools):
+                                agent_name = name
+                                actual_tool_name = tool_name
+                                break
+                        
+                        if not agent_name:
+                            # 工具未找到
+                            error_msg = f"Tool '{tool_name}' not found"
+                            langchain_messages.append(
+                                ToolMessage(
+                                    content=json.dumps({"error": error_msg}),
+                                    tool_call_id=tool_id
+                                )
+                            )
+                            continue
+                    
+                    # 执行工具
+                    try:
+                        result = await self.execute_tool(
+                            agent_name=agent_name,
+                            tool_name=actual_tool_name,
+                            arguments=tool_args
+                        )
+                        
+                        # 添加工具结果到消息
+                        langchain_messages.append(
+                            ToolMessage(
+                                content=json.dumps(result, default=str),
+                                tool_call_id=tool_id
+                            )
+                        )
+                        
+                        # 记录到tool_calls_made
+                        tool_calls_made.append(self.tool_call_history[-1])
+                        
+                    except Exception as e:
+                        # 工具执行失败
+                        error_msg = f"Tool execution failed: {str(e)}"
+                        langchain_messages.append(
+                            ToolMessage(
+                                content=json.dumps({"error": error_msg}),
+                                tool_call_id=tool_id
+                            )
+                        )
+            
+            except Exception as e:
+                return f"Error during LLM tool calling: {str(e)}", tool_calls_made
+        
+        # 达到最大迭代次数，最后再调用一次获取最终答案
         try:
-            # 调用 LLM
-            response = self.llm_client.invoke(langchain_messages)
-            return response.content, []
+            final_response = llm_with_tools.invoke(langchain_messages)
+            return final_response.content, tool_calls_made
         except Exception as e:
-            return f"LLM call failed: {str(e)}", []
+            return f"Max iterations reached. Last error: {str(e)}", tool_calls_made
+    
+    def _create_langchain_tools(self) -> List[Any]:
+        """
+        将MCP工具转换为LangChain工具格式
+        
+        Returns:
+            LangChain工具列表
+        """
+        from langchain_core.tools import StructuredTool
+        from pydantic import BaseModel, Field, create_model
+        
+        langchain_tools = []
+        
+        for agent_name, connection in self.agents.items():
+            for tool in connection.tools:
+                tool_name = f"{agent_name}__{tool['name']}"
+                tool_description = f"[{agent_name}] {tool['description']}"
+                
+                # 创建输入模型
+                input_schema = tool['inputSchema']
+                properties = input_schema.get('properties', {})
+                required = input_schema.get('required', [])
+                
+                # 构建Pydantic字段
+                fields = {}
+                for prop_name, prop_schema in properties.items():
+                    field_type = str  # 默认类型
+                    if prop_schema.get('type') == 'integer':
+                        field_type = int
+                    elif prop_schema.get('type') == 'number':
+                        field_type = float
+                    elif prop_schema.get('type') == 'boolean':
+                        field_type = bool
+                    
+                    # 设置默认值
+                    default = ... if prop_name in required else None
+                    
+                    fields[prop_name] = (
+                        field_type,
+                        Field(
+                            default=default,
+                            description=prop_schema.get('description', '')
+                        )
+                    )
+                
+                # 如果没有参数，使用空模型
+                if not fields:
+                    fields = {'__dummy__': (str, Field(default='', description='No parameters'))}
+                
+                # 创建输入模型
+                InputModel = create_model(
+                    f"{tool_name}_input",
+                    **fields
+                )
+                
+                # 创建工具执行函数
+                def make_tool_func(agent_name, tool_name):
+                    async def tool_func(**kwargs):
+                        # 移除dummy参数
+                        kwargs.pop('__dummy__', None)
+                        result = await self.execute_tool(
+                            agent_name=agent_name,
+                            tool_name=tool_name,
+                            arguments=kwargs
+                        )
+                        return json.dumps(result, default=str)
+                    return tool_func
+                
+                # 创建LangChain工具
+                lc_tool = StructuredTool(
+                    name=tool_name,
+                    description=tool_description,
+                    func=make_tool_func(agent_name, tool['name']),
+                    args_schema=InputModel,
+                    coroutine=make_tool_func(agent_name, tool['name'])
+                )
+                
+                langchain_tools.append(lc_tool)
+        
+        return langchain_tools
     
     async def analyze_and_decide(
         self,
