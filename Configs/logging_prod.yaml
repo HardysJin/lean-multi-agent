@@ -1,0 +1,47 @@
+# ==========================================
+# Production Environment Logging Configuration
+# ==========================================
+#
+# 生产环境配置：
+# - INFO级别（只记录重要信息）
+# - 关闭控制台（避免性能影响）
+# - 文件和数据库持久化
+# - 便于事后分析和监控
+
+level: INFO  # 只记录重要信息
+
+outputs:
+  console:
+    enabled: false  # 生产环境不输出到控制台
+    colored: false
+  
+  file:
+    enabled: true
+    directory: Data/logs/prod
+    filename_pattern: "prod_{session_id}.log"
+  
+  database:
+    enabled: true  # 生产环境启用数据库，便于查询和监控
+    path: Data/logs/prod/execution.db
+
+categories:
+  decision: true
+  tool_call: true
+  cache: false      # 生产环境不记录缓存细节
+  memory: false     # 不记录Memory操作细节
+  timeframe: true
+  escalation: true  # 重要：反向传导必须记录
+  error: true       # 重要：错误必须记录
+  performance: true
+
+performance:
+  enabled: true
+  slow_threshold_ms: 2000  # 生产环境阈值更宽松
+
+session:
+  auto_generate: true
+
+backtest:
+  log_each_date: true
+  generate_summary: true
+  trace_visualization: false  # 生产环境不需要可视化

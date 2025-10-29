@@ -1,0 +1,61 @@
+# ==========================================
+# Backtest Environment Logging Configuration
+# ==========================================
+#
+# 回测环境配置：
+# - INFO级别（完整的决策信息）
+# - 彩色控制台（便于实时观察）
+# - 完整持久化（文件+数据库）
+# - 自动生成摘要和可视化
+
+level: INFO  # 记录所有决策
+
+outputs:
+  console:
+    enabled: true   # 显示回测进度
+    colored: true
+  
+  file:
+    enabled: true
+    directory: Data/logs/backtest
+    filename_pattern: "backtest_{session_id}.log"
+  
+  database:
+    enabled: true   # 数据库便于事后分析
+    path: Data/logs/backtest/execution.db
+
+categories:
+  decision: true      # ⭐ 必须：记录所有决策
+  tool_call: true     # ⭐ 必须：记录工具调用
+  cache: true         # 记录缓存命中（优化参考）
+  memory: true        # 记录Memory操作
+  timeframe: true     # ⭐ 必须：时间尺度切换
+  escalation: true    # ⭐ 必须：反向传导
+  error: true
+  performance: true   # 性能分析
+
+performance:
+  enabled: true
+  slow_threshold_ms: 1000
+
+session:
+  auto_generate: true  # 每次回测生成唯一ID
+
+backtest:
+  log_each_date: true        # ⭐ 记录每个回测日期
+  generate_summary: true     # ⭐ 自动生成摘要
+  trace_visualization: true  # ⭐ 生成可视化轨迹
+
+# 回测特定选项
+backtest_options:
+  # 每N天打印一次进度
+  progress_interval: 10
+  
+  # 是否在控制台显示详细进度条
+  show_progress_bar: true
+  
+  # 是否在每个决策点暂停（调试用）
+  pause_on_decision: false
+  
+  # 是否记录未来数据访问警告
+  log_lookahead_warnings: true

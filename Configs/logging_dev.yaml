@@ -1,0 +1,46 @@
+# ==========================================
+# Development Environment Logging Configuration
+# ==========================================
+#
+# 开发环境配置：
+# - 详细的DEBUG级别日志
+# - 彩色控制台输出
+# - 文件持久化
+# - 不使用数据库（避免额外开销）
+
+level: DEBUG  # 最详细的日志
+
+outputs:
+  console:
+    enabled: true
+    colored: true  # 彩色输出，便于区分不同级别
+  
+  file:
+    enabled: true
+    directory: Data/logs/dev
+    filename_pattern: "dev_{session_id}.log"
+  
+  database:
+    enabled: false  # 开发环境不需要数据库
+
+categories:
+  decision: true
+  tool_call: true
+  cache: true
+  memory: true
+  timeframe: true
+  escalation: true
+  error: true
+  performance: true
+
+performance:
+  enabled: true
+  slow_threshold_ms: 500  # 开发环境更严格的阈值
+
+session:
+  auto_generate: true
+
+backtest:
+  log_each_date: true
+  generate_summary: true
+  trace_visualization: true  # 开发环境启用可视化

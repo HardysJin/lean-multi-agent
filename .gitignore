@@ -133,3 +133,5 @@ tmp/
 
 # LEAN source (too large for version control)
 Lean/*
+
+Data/logs
