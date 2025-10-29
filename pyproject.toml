@@ -1,0 +1,156 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lean-multi-agent"
+version = "0.1.0"
+description = "基于 LEAN 引擎的多智能体量化交易系统"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    {name = "HardysJin"}
+]
+keywords = [
+    "trading", 
+    "quantitative", 
+    "multi-agent", 
+    "AI", 
+    "machine-learning",
+    "LEAN",
+    "MCP",
+    "LangChain",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.21.0",
+    "mcp>=1.0.0",
+    "chromadb>=0.4.0",
+    "sentence-transformers>=2.2.0",
+    "openai>=1.0.0",
+    "anthropic>=0.5.0",
+    "langchain>=0.1.0",
+    "langchain-core>=0.1.0",
+    "langchain-openai>=0.0.5",
+    "langchain-anthropic>=0.1.0",
+    "langchain-deepseek>=0.0.1",
+    "langchain-community>=0.0.20",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "newsapi-python>=0.2.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "ipython>=8.0.0",
+]
+docs = [
+    "sphinx>=6.0.0",
+    "sphinx-rtd-theme>=1.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/HardysJin/lean-multi-agent"
+Documentation = "https://github.com/HardysJin/lean-multi-agent#readme"
+Repository = "https://github.com/HardysJin/lean-multi-agent"
+Issues = "https://github.com/HardysJin/lean-multi-agent/issues"
+
+[tool.setuptools]
+packages = [
+    "Agents",
+    "Algorithm",
+    "Backtests",
+    "Configs",
+    "Memory",
+    "Utils",
+]
+
+[tool.setuptools.package-data]
+Configs = ["*.json"]
+Data = ["README.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["Tests/unit"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "--disable-warnings",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "asyncio: marks tests as async tests",
+]
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+  | Lean
+)/
+'''
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+exclude = [
+    "Lean/",
+    "Tests/",
+]
+
+[tool.coverage.run]
+source = ["Agents", "Algorithm", "Memory"]
+omit = [
+    "Tests/*",
+    "Lean/*",
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

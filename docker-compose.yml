@@ -11,7 +11,6 @@ services:
       - ./Lean/Common:/Lean/Common:ro
       - ./Lean/Data:/Lean/Data:rw
       - ./Results:/Results:rw
-      # - ./Logs:/Lean/Logs:rw
       # 配置文件（支持通过环境变量切换）
       - ./Configs/${CONFIG_FILE:-config.json}:/Lean/Launcher/bin/Debug/config.json:ro
     working_dir: /workspace

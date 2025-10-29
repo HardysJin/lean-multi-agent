@@ -1,0 +1,31 @@
+# Include documentation
+include README.md
+include LICENSE
+
+# Include configuration files
+include requirements.txt
+include pytest.ini
+include docker-compose.yml
+
+# Include config files
+recursive-include Configs *.json
+
+# Include data directory structure
+recursive-include Data README.md
+
+# Exclude test files from distribution
+recursive-exclude Tests *
+recursive-exclude tests *
+
+# Exclude LEAN source code (too large)
+recursive-exclude Lean *
+
+# Exclude build artifacts
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+recursive-exclude * .DS_Store
+
+# Exclude development files
+exclude .env
+exclude .env.template
+exclude .gitignore

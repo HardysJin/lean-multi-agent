@@ -324,7 +324,7 @@ class MetaAgent:
                 "recent_decisions": [
                     {
                         "action": d.action,
-                        "confidence": d.confidence_score,
+                        "confidence": d.conviction,
                         "reasoning": d.reasoning,
                         "timestamp": d.timestamp.isoformat(),
                         "timeframe": str(d.timeframe)

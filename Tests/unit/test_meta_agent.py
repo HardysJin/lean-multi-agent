@@ -36,8 +36,8 @@ class TestMetaAgentInitialization:
     """测试Meta Agent初始化"""
     
     def test_initialization_without_dependencies(self):
-        """测试无依赖的基础初始化"""
-        meta = MetaAgent()
+        """测试无依赖的基础初始化（禁用memory）"""
+        meta = MetaAgent(enable_memory=False)
         
         # 使用默认LLM (from get_default_llm)
         assert meta.llm_client is not None
@@ -303,7 +303,7 @@ class TestMemoryIntegration:
     
     def test_retrieve_memory_without_state_manager(self):
         """测试无StateManager时的记忆检索"""
-        meta = MetaAgent(state_manager=None)
+        meta = MetaAgent(state_manager=None, enable_memory=False)
         
         context = meta._retrieve_memory_context("AAPL")
         
