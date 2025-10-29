@@ -84,7 +84,9 @@ class NewsAgent(BaseMCPAgent):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        llm_config: Optional[LLMConfig] = None
+        llm_config: Optional[LLMConfig] = None,
+        backtest_mode: bool = False,
+        backtest_date: Optional[datetime] = None
     ):
         """
         初始化News Agent
@@ -92,6 +94,8 @@ class NewsAgent(BaseMCPAgent):
         Args:
             api_key: News API key (如果为None，从环境变量NEWS_API_KEY读取)
             llm_config: LLM配置（用于情绪分析）
+            backtest_mode: 是否为回测模式（避免使用未来信息）
+            backtest_date: 回测日期（用于获取历史新闻）
         """
         # 初始化基类（自动启用LLM）
         super().__init__(
@@ -101,6 +105,12 @@ class NewsAgent(BaseMCPAgent):
             llm_config=llm_config,
             enable_llm=True  # 必须启用LLM用于情绪分析
         )
+        
+        # 回测模式设置
+        self.backtest_mode = backtest_mode
+        self.backtest_date = backtest_date
+        if backtest_mode and not backtest_date:
+            self.logger.warning("Backtest mode enabled but no backtest_date provided. Using datetime.now()")
         
         # 获取API key
         self.api_key = api_key or os.getenv("NEWS_API_KEY")
@@ -126,6 +136,17 @@ class NewsAgent(BaseMCPAgent):
         self._news_cache: Dict[str, List[NewsArticle]] = {}
         self._cache_ttl = 300  # 5分钟缓存
         self._cache_timestamps: Dict[str, datetime] = {}
+    
+    def _get_current_time(self) -> datetime:
+        """
+        获取"当前"时间
+        
+        在回测模式下返回回测日期，避免未来信息泄露
+        在实时模式下返回真实当前时间
+        """
+        if self.backtest_mode and self.backtest_date:
+            return self.backtest_date
+        return datetime.now()
     
     def get_tools(self) -> List[Tool]:
         """返回News Agent提供的工具"""
@@ -315,7 +336,7 @@ class NewsAgent(BaseMCPAgent):
         cache_key = f"{symbol}_{limit}_{days_back}"
         if cache_key in self._news_cache:
             cached_time = self._cache_timestamps.get(cache_key)
-            if cached_time and (datetime.now() - cached_time).seconds < self._cache_ttl:
+            if cached_time and (self._get_current_time() - cached_time).seconds < self._cache_ttl:
                 self.logger.info(f"Using cached news for {symbol}")
                 return self._news_cache[cache_key]
         
@@ -325,8 +346,8 @@ class NewsAgent(BaseMCPAgent):
             return self._get_mock_news(symbol, limit)
         
         try:
-            # 计算日期范围
-            to_date = datetime.now()
+            # 计算日期范围（使用回测日期或当前日期）
+            to_date = self._get_current_time()
             from_date = to_date - timedelta(days=days_back)
             
             # 构建查询（股票代码 + 常见财经关键词）
@@ -354,14 +375,14 @@ class NewsAgent(BaseMCPAgent):
                         published_at=datetime.strptime(
                             article_data['publishedAt'],
                             '%Y-%m-%dT%H:%M:%SZ'
-                        ) if article_data.get('publishedAt') else datetime.now(),
+                        ) if article_data.get('publishedAt') else self._get_current_time(),
                         content=article_data.get('content')
                     )
                     articles.append(article)
             
             # 缓存结果
             self._news_cache[cache_key] = articles
-            self._cache_timestamps[cache_key] = datetime.now()
+            self._cache_timestamps[cache_key] = self._get_current_time()
             
             self.logger.info(f"Fetched {len(articles)} articles for {symbol}")
             return articles
@@ -541,7 +562,7 @@ Consider:
             neutral_count=neutral_count,
             key_themes=key_themes,
             summary=summary,
-            timestamp=datetime.now()
+            timestamp=self._get_current_time()
         )
     
     async def _generate_summary_with_llm(
@@ -615,27 +636,29 @@ Provide a concise summary (2-3 sentences) covering:
     
     def _get_mock_news(self, symbol: str, limit: int) -> List[NewsArticle]:
         """生成模拟新闻数据（用于测试）"""
+        current_time = self._get_current_time()
+        
         mock_articles = [
             NewsArticle(
                 title=f"{symbol} Reports Strong Q4 Earnings",
                 description="Company beats analyst expectations with revenue growth.",
                 source="Mock Financial News",
                 url=f"https://example.com/{symbol}-earnings",
-                published_at=datetime.now() - timedelta(hours=2)
+                published_at=current_time - timedelta(hours=2)
             ),
             NewsArticle(
                 title=f"{symbol} Announces New Product Launch",
                 description="New innovative product expected to drive future growth.",
                 source="Mock Tech News",
                 url=f"https://example.com/{symbol}-product",
-                published_at=datetime.now() - timedelta(hours=5)
+                published_at=current_time - timedelta(hours=5)
             ),
             NewsArticle(
                 title=f"Analyst Upgrades {symbol} Rating",
                 description="Major investment bank raises price target citing strong fundamentals.",
                 source="Mock Market Watch",
                 url=f"https://example.com/{symbol}-upgrade",
-                published_at=datetime.now() - timedelta(hours=12)
+                published_at=current_time - timedelta(hours=12)
             ),
         ]
         return mock_articles[:limit]
@@ -674,7 +697,7 @@ Provide a concise summary (2-3 sentences) covering:
                 description=article_data.get('description', ''),
                 source=article_data.get('source', 'Unknown'),
                 url=article_data.get('url', ''),
-                published_at=datetime.now()
+                published_at=self._get_current_time()
             )
             news_articles.append(article)
         
@@ -727,7 +750,7 @@ Provide a concise summary (2-3 sentences) covering:
                         published_at=datetime.strptime(
                             article_data['publishedAt'],
                             '%Y-%m-%dT%H:%M:%SZ'
-                        ) if article_data.get('publishedAt') else datetime.now()
+                        ) if article_data.get('publishedAt') else self._get_current_time()
                     )
                     articles.append(article)
             

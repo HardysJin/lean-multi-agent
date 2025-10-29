@@ -30,5 +30,8 @@ numpy>=1.24.0
 yfinance>=0.2.32
 pandas-ta>=0.3.14b
 
+# Backtesting
+vectorbt>=0.28.0
+
 # News API
 newsapi-python>=0.2.7
