@@ -91,7 +91,8 @@ class VectorBTBacktest:
     async def precompute_signals(
         self,
         strategy_func=None,
-        use_meta_agent: bool = True
+        use_meta_agent: bool = True,
+        progress_callback=None
     ) -> Dict[str, pd.Series]:
         """
         预计算所有交易信号
@@ -99,6 +100,7 @@ class VectorBTBacktest:
         Args:
             strategy_func: 自定义策略函数 (symbol, date, price) -> signal
             use_meta_agent: 是否使用 MetaAgent 生成信号
+            progress_callback: 进度回调函数 (symbol, current, total, message)
         
         Returns:
             Dict[symbol, Series]: 每个股票的信号序列 (1=BUY, 0=SELL/HOLD)
@@ -111,6 +113,8 @@ class VectorBTBacktest:
         # 初始化 Meta Agent
         if use_meta_agent and self.meta_agent is None:
             self.meta_agent = MetaAgent()
+            if progress_callback:
+                progress_callback(None, 0, 0, "初始化 Meta Agent...")
         
         self._signals = {}
         
@@ -122,6 +126,8 @@ class VectorBTBacktest:
             close_prices = df['Close']
             
             self.logger.info(f"Computing signals for {symbol} ({len(close_prices)} days)...")
+            if progress_callback:
+                progress_callback(symbol, 0, len(close_prices), f"开始分析 {symbol}")
             
             signals = []
             
@@ -129,6 +135,13 @@ class VectorBTBacktest:
                 # 显示进度
                 if (idx + 1) % 10 == 0 or idx == 0:
                     self.logger.info(f"  {symbol}: {idx + 1}/{len(close_prices)} days")
+                    if progress_callback:
+                        progress_callback(
+                            symbol, 
+                            idx + 1, 
+                            len(close_prices), 
+                            f"分析 {symbol} ({date.strftime('%Y-%m-%d')})"
+                        )
                 
                 try:
                     if use_meta_agent:
