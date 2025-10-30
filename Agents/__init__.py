@@ -18,7 +18,6 @@ Legacy (Old Implementation):
 """
 
 from .base_mcp_agent import BaseMCPAgent, ExampleAgent
-from .technical_agent import TechnicalAnalysisAgent
 from .meta_agent import MetaAgent, MetaDecision, ToolCall, create_meta_agent_with_technical
 from .decision_makers import (
     StrategicDecisionMaker,
@@ -44,14 +43,14 @@ from .utils.llm_config import (
 from .core import (
     MacroAgent, MacroContext,
     SectorAgent, SectorContext, SECTOR_MAPPING,
-    NewsAgent, NewsArticle, NewsSentimentReport
+    NewsAgent, NewsArticle, NewsSentimentReport,
+    TechnicalAnalysisAgent
 )
 
 __all__ = [
     # MCP-based Agents
     'BaseMCPAgent',
     'ExampleAgent',
-    'TechnicalAnalysisAgent',
     'MetaAgent',
     'MetaDecision',
     'ToolCall',
@@ -66,6 +65,7 @@ __all__ = [
     'NewsAgent',
     'NewsArticle',
     'NewsSentimentReport',
+    'TechnicalAnalysisAgent',
     
     # DecisionMakers
     'StrategicDecisionMaker',

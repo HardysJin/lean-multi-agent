@@ -13,6 +13,7 @@ from .base_agent import BaseAgent
 from .macro_agent import MacroAgent, MacroContext
 from .sector_agent import SectorAgent, SectorContext, SECTOR_MAPPING
 from .news_agent import NewsAgent, NewsArticle, NewsSentimentReport
+from .technical_agent import TechnicalAnalysisAgent
 
 # 重新导出测试工具
 from Agents.utils.llm_config import MockLLM
@@ -27,5 +28,6 @@ __all__ = [
     'NewsAgent',
     'NewsArticle',
     'NewsSentimentReport',
+    'TechnicalAnalysisAgent',
     'MockLLM',  # 测试工具
 ]
