@@ -21,6 +21,13 @@ from .news_agent import NewsAgent, NewsArticle, NewsSentimentReport
 from .macro_agent import MacroAgent, MacroContext
 from .sector_agent import SectorAgent, SectorContext
 from .meta_agent import MetaAgent, MetaDecision, ToolCall, create_meta_agent_with_technical
+from .decision_makers import (
+    StrategicDecisionMaker,
+    CampaignDecisionMaker,
+    TacticalDecisionMaker,
+    DecisionMakerFactory,
+    Decision
+)
 from .llm_config import (
     LLMConfig, LLMProvider,
     get_default_llm, get_default_llm_config, set_default_llm_config,
@@ -35,10 +42,21 @@ __all__ = [
     'NewsAgent',
     'NewsArticle',
     'NewsSentimentReport',
+    'MacroAgent',
+    'MacroContext',
+    'SectorAgent',
+    'SectorContext',
     'MetaAgent',
     'MetaDecision',
     'ToolCall',
     'create_meta_agent_with_technical',
+    
+    # DecisionMakers
+    'StrategicDecisionMaker',
+    'CampaignDecisionMaker',
+    'TacticalDecisionMaker',
+    'DecisionMakerFactory',
+    'Decision',
     
     # LLM Configuration
     'LLMConfig',
