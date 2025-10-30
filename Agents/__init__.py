@@ -2,13 +2,15 @@
 Agents Module - MCP-based Multi-Agent System
 
 包含：
+- core: 核心业务逻辑层（纯Python，无协议依赖）
 - base_mcp_agent: MCP Agent基类
 - technical_agent: 技术分析Agent (MCP Server)
 - news_agent: 新闻分析Agent (MCP Server, 可选)
-- macro_agent: 宏观分析Agent (MCP Server) - NEW
+- sector_agent: 行业分析Agent
 - meta_agent: Meta Agent (MCP Client)
-- prompt_builder: Prompt构建工具
-- llm_config: 统一LLM配置管理
+- decision_makers: 决策制定器
+- layered_scheduler: 分层调度器
+- utils: 工具模块（LLM配置等）
 
 Legacy (Old Implementation):
 - base_agent: Agent基类 (旧版)
@@ -18,7 +20,6 @@ Legacy (Old Implementation):
 from .base_mcp_agent import BaseMCPAgent, ExampleAgent
 from .technical_agent import TechnicalAnalysisAgent
 from .news_agent import NewsAgent, NewsArticle, NewsSentimentReport
-from .macro_agent import MacroAgent, MacroContext
 from .sector_agent import SectorAgent, SectorContext
 from .meta_agent import MetaAgent, MetaDecision, ToolCall, create_meta_agent_with_technical
 from .decision_makers import (
@@ -35,11 +36,14 @@ from .layered_scheduler import (
     EscalationReason,
     SchedulerState
 )
-from .llm_config import (
+from .utils.llm_config import (
     LLMConfig, LLMProvider,
     get_default_llm, get_default_llm_config, set_default_llm_config,
-    create_llm, get_available_providers, get_mock_llm
+    create_llm, get_available_providers, get_mock_llm, MockLLM
 )
+
+# 重新导出 core 模块（新架构）
+from .core import MacroAgent, MacroContext
 
 __all__ = [
     # MCP-based Agents
@@ -49,14 +53,16 @@ __all__ = [
     'NewsAgent',
     'NewsArticle',
     'NewsSentimentReport',
-    'MacroAgent',
-    'MacroContext',
     'SectorAgent',
     'SectorContext',
     'MetaAgent',
     'MetaDecision',
     'ToolCall',
     'create_meta_agent_with_technical',
+    
+    # Core Business Logic (New Architecture)
+    'MacroAgent',
+    'MacroContext',
     
     # DecisionMakers
     'StrategicDecisionMaker',
@@ -81,4 +87,5 @@ __all__ = [
     'create_llm',
     'get_available_providers',
     'get_mock_llm',
+    'MockLLM',  # 测试工具
 ]

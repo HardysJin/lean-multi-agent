@@ -13,7 +13,7 @@ from Agents.decision_makers import (
     DecisionMakerFactory,
     Decision
 )
-from Agents.macro_agent import MacroAgent, MacroContext
+from Agents.core import MacroAgent, MacroContext
 from Agents.sector_agent import SectorAgent, SectorContext
 from Agents.meta_agent import MetaAgent, MetaDecision
 

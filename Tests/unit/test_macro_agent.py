@@ -7,9 +7,6 @@ Tests for MacroAgent
 3. 时间控制测试（防止Look-Ahead）
 4. Dependency Injection测试
 5. 多实例隔离测试
-6. LLM集成测试
-7. 工具调用测试
-8. 资源读取测试
 """
 
 import pytest
@@ -18,27 +15,50 @@ from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timedelta
 import json
 
-from Agents.macro_agent import MacroAgent, MacroContext
-from Agents.llm_config import LLMConfig
+from Agents.core import MacroAgent, MacroContext, MockLLM
+from Agents.utils.llm_config import LLMConfig
+
+
+# Pytest fixture for MockLLM
+@pytest.fixture
+def mock_llm():
+    """提供标准的 MockLLM 响应"""
+    return MockLLM(response=json.dumps({
+        'market_regime': 'bull',
+        'regime_confidence': 0.85,
+        'interest_rate_trend': 'stable',
+        'current_rate': 5.25,
+        'risk_level': 4.0,
+        'volatility_level': 'medium',
+        'gdp_trend': 'expanding',
+        'inflation_level': 'moderate',
+        'market_sentiment': 'greed',
+        'vix_level': 18.5,
+        'confidence_score': 0.9,
+        'reasoning': 'Mock LLM analysis for testing'
+    }))
 
 
 class TestMacroAgentBasics:
     """基本功能测试"""
     
     @pytest.mark.asyncio
-    async def test_initialization(self):
+    async def test_initialization(self, mock_llm):
         """测试初始化"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         assert agent.name == "macro-agent"
         assert agent.enable_cache is True
         assert agent.cache_ttl == 3600
-        assert len(agent._cache) == 0
+        # 不直接访问私有属性，使用 get_cache_stats
+        stats = agent.get_cache_stats()
+        assert stats['cached_items'] == 0
     
     @pytest.mark.asyncio
-    async def test_initialization_with_custom_config(self):
+    async def test_initialization_with_custom_config(self, mock_llm):
         """测试自定义配置"""
         agent = MacroAgent(
+            llm_client=mock_llm,
             cache_ttl=7200,
             enable_cache=False
         )
@@ -47,9 +67,9 @@ class TestMacroAgentBasics:
         assert agent.enable_cache is False
     
     @pytest.mark.asyncio
-    async def test_analyze_macro_environment_basic(self):
+    async def test_analyze_macro_environment_basic(self, mock_llm):
         """测试基本宏观分析"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         context = await agent.analyze_macro_environment()
         
@@ -67,9 +87,9 @@ class TestMacroAgentBasics:
         assert 'allow_long' in context.constraints
     
     @pytest.mark.asyncio
-    async def test_get_market_regime(self):
+    async def test_get_market_regime(self, mock_llm):
         """测试快速regime获取"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         result = await agent.get_market_regime()
         
@@ -80,9 +100,9 @@ class TestMacroAgentBasics:
         assert 0 <= result['confidence'] <= 1
     
     @pytest.mark.asyncio
-    async def test_get_risk_constraints(self):
+    async def test_get_risk_constraints(self, mock_llm):
         """测试风险约束获取"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         constraints = await agent.get_risk_constraints()
         
@@ -98,9 +118,9 @@ class TestMacroAgentCache:
     """缓存机制测试"""
     
     @pytest.mark.asyncio
-    async def test_cache_works(self):
+    async def test_cache_works(self, mock_llm):
         """测试缓存生效"""
-        agent = MacroAgent(cache_ttl=3600)
+        agent = MacroAgent(llm_client=mock_llm, cache_ttl=3600)
         
         # 第一次调用
         context1 = await agent.analyze_macro_environment()
@@ -108,31 +128,33 @@ class TestMacroAgentCache:
         # 第二次调用（应该从cache返回）
         context2 = await agent.analyze_macro_environment()
         
-        # 应该是同一个对象（从cache返回）
+        # MockLLM 应该只被调用一次（第二次走cache）
+        assert mock_llm.call_count == 1
+                # 应该是同一个对象（从cache返回）
         assert context1.analysis_timestamp == context2.analysis_timestamp
         
         # 验证cache中有数据
         assert len(agent._cache) > 0
     
     @pytest.mark.asyncio
-    async def test_cache_disabled(self):
+    async def test_cache_disabled(self, mock_llm):
         """测试禁用缓存"""
-        agent = MacroAgent(enable_cache=False)
+        agent = MacroAgent(llm_client=mock_llm, enable_cache=False)
         
         context1 = await agent.analyze_macro_environment()
         await asyncio.sleep(0.1)
         context2 = await agent.analyze_macro_environment()
         
-        # 应该是不同的分析（时间戳不同）
-        assert context1.analysis_timestamp != context2.analysis_timestamp
+        # MockLLM 应该被调用了两次（因为cache禁用）
+        assert mock_llm.call_count == 2
         
         # cache应该为空
         assert len(agent._cache) == 0
     
     @pytest.mark.asyncio
-    async def test_force_refresh_ignores_cache(self):
+    async def test_force_refresh_ignores_cache(self, mock_llm):
         """测试强制刷新忽略缓存"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         # 第一次调用
         context1 = await agent.analyze_macro_environment()
@@ -146,9 +168,9 @@ class TestMacroAgentCache:
         assert context1.analysis_timestamp != context2.analysis_timestamp
     
     @pytest.mark.asyncio
-    async def test_clear_cache(self):
+    async def test_clear_cache(self, mock_llm):
         """测试清空缓存"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         await agent.analyze_macro_environment()
         assert len(agent._cache) > 0
@@ -157,9 +179,9 @@ class TestMacroAgentCache:
         assert len(agent._cache) == 0
     
     @pytest.mark.asyncio
-    async def test_get_cache_stats(self):
+    async def test_get_cache_stats(self, mock_llm):
         """测试缓存统计"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         await agent.analyze_macro_environment()
         
@@ -175,9 +197,9 @@ class TestMacroAgentTimeControl:
     """时间控制测试（防止Look-Ahead）"""
     
     @pytest.mark.asyncio
-    async def test_backtest_mode_with_time(self):
+    async def test_backtest_mode_with_time(self, mock_llm):
         """测试回测模式（指定时间）"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         backtest_time = datetime(2023, 6, 1, 0, 0, 0)
         context = await agent.analyze_macro_environment(visible_data_end=backtest_time)
@@ -186,9 +208,9 @@ class TestMacroAgentTimeControl:
         assert context.data_end_time == backtest_time
     
     @pytest.mark.asyncio
-    async def test_different_times_different_cache(self):
+    async def test_different_times_different_cache(self, mock_llm):
         """测试不同时间点使用不同缓存"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         time1 = datetime(2023, 6, 1)
         time2 = datetime(2023, 7, 1)
@@ -207,10 +229,10 @@ class TestMacroAgentDependencyInjection:
     """Dependency Injection测试"""
     
     @pytest.mark.asyncio
-    async def test_multiple_instances_isolated(self):
+    async def test_multiple_instances_isolated(self, mock_llm):
         """测试多实例隔离"""
-        agent1 = MacroAgent()
-        agent2 = MacroAgent()
+        agent1 = MacroAgent(llm_client=mock_llm)
+        agent2 = MacroAgent(llm_client=mock_llm)
         
         # 两个实例应该有独立的cache
         await agent1.analyze_macro_environment()
@@ -220,7 +242,7 @@ class TestMacroAgentDependencyInjection:
         assert 'test_key' not in agent2._cache
     
     @pytest.mark.asyncio
-    async def test_custom_llm_config_injection(self):
+    async def test_custom_llm_config_injection(self, mock_llm):
         """测试自定义LLM配置注入"""
         # 创建mock LLM config
         mock_llm_config = Mock(spec=LLMConfig)
@@ -243,25 +265,40 @@ class TestMacroAgentDependencyInjection:
             'confidence_score': 0.85,
             'reasoning': 'Test reasoning'
         })
-        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
         
-        agent = MacroAgent(llm_config=mock_llm_config)
-        agent._llm_client = mock_llm  # 直接注入mock LLM
+        # 使用新的 MockLLM（已有 call tracking）
+        mock_llm = MockLLM(response=json.dumps({
+            'market_regime': 'bull',
+            'regime_confidence': 0.85,
+            'interest_rate_trend': 'stable',
+            'current_rate': 5.0,
+            'risk_level': 4.0,
+            'volatility_level': 'medium',
+            'gdp_trend': 'expanding',
+            'inflation_level': 'moderate',
+            'market_sentiment': 'greed',
+            'vix_level': 15.0,
+            'confidence_score': 0.85,
+            'reasoning': 'Test reasoning'
+        }))
+        
+        agent = MacroAgent(llm_client=mock_llm)
         
         context = await agent.analyze_macro_environment()
         
         # 验证使用了mock LLM
-        assert mock_llm.ainvoke.called
+        assert mock_llm.call_count > 0
         assert context.market_regime == 'bull'
         assert context.reasoning == 'Test reasoning'
 
 
+@pytest.mark.skip(reason="MCP protocol tests - moved to wrapper tests")
 class TestMacroAgentTools:
-    """MCP工具调用测试"""
+    """MCP工具调用测试 - 这些测试应该在 MCP wrapper 中进行"""
     
     def test_get_tools(self):
         """测试工具列表"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         tools = agent.get_tools()
         
@@ -272,9 +309,9 @@ class TestMacroAgentTools:
         assert 'get_risk_constraints' in tool_names
     
     @pytest.mark.asyncio
-    async def test_handle_tool_call_analyze(self):
+    async def test_handle_tool_call_analyze(self, mock_llm):
         """测试analyze工具调用"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         result = await agent.handle_tool_call(
             'analyze_macro_environment',
@@ -286,9 +323,9 @@ class TestMacroAgentTools:
         assert 'constraints' in result
     
     @pytest.mark.asyncio
-    async def test_handle_tool_call_regime(self):
+    async def test_handle_tool_call_regime(self, mock_llm):
         """测试regime工具调用"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         result = await agent.handle_tool_call(
             'get_market_regime',
@@ -300,9 +337,9 @@ class TestMacroAgentTools:
         assert 'confidence' in result
     
     @pytest.mark.asyncio
-    async def test_handle_tool_call_constraints(self):
+    async def test_handle_tool_call_constraints(self, mock_llm):
         """测试constraints工具调用"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         result = await agent.handle_tool_call(
             'get_risk_constraints',
@@ -314,9 +351,9 @@ class TestMacroAgentTools:
         assert 'allow_long' in result
     
     @pytest.mark.asyncio
-    async def test_handle_tool_call_with_time(self):
+    async def test_handle_tool_call_with_time(self, mock_llm):
         """测试工具调用（带时间参数）"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         result = await agent.handle_tool_call(
             'analyze_macro_environment',
@@ -326,12 +363,13 @@ class TestMacroAgentTools:
         assert result['data_end_time'] == '2023-06-01T00:00:00'
 
 
+@pytest.mark.skip(reason="MCP protocol tests - moved to wrapper tests")
 class TestMacroAgentResources:
-    """MCP资源读取测试"""
+    """MCP资源读取测试 - 这些测试应该在 MCP wrapper 中进行"""
     
     def test_get_resources(self):
         """测试资源列表"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         resources = agent.get_resources()
         
@@ -341,9 +379,9 @@ class TestMacroAgentResources:
         assert 'macro://cache-stats' in uris
     
     @pytest.mark.asyncio
-    async def test_read_current_resource(self):
+    async def test_read_current_resource(self, mock_llm):
         """测试读取当前宏观环境资源"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         content = await agent.handle_resource_read('macro://current')
         
@@ -352,9 +390,9 @@ class TestMacroAgentResources:
         assert 'constraints' in data
     
     @pytest.mark.asyncio
-    async def test_read_cache_stats_resource(self):
+    async def test_read_cache_stats_resource(self, mock_llm):
         """测试读取缓存统计资源"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         content = await agent.handle_resource_read('macro://cache-stats')
         
@@ -424,7 +462,7 @@ class TestMacroAgentIntegration:
     """集成测试"""
     
     @pytest.mark.asyncio
-    async def test_complete_workflow(self):
+    async def test_complete_workflow(self, mock_llm):
         """测试完整工作流"""
         agent = MacroAgent(cache_ttl=60)
         
@@ -450,9 +488,9 @@ class TestMacroAgentIntegration:
         assert stats_after_clear['cached_items'] == 0
     
     @pytest.mark.asyncio
-    async def test_backtest_scenario(self):
+    async def test_backtest_scenario(self, mock_llm):
         """测试回测场景"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         # 模拟回测：分析2023年多个时间点
         dates = [
@@ -480,9 +518,9 @@ class TestMacroAgentConstraints:
     """约束条件生成测试"""
     
     @pytest.mark.asyncio
-    async def test_bull_market_constraints(self):
+    async def test_bull_market_constraints(self, mock_llm):
         """测试牛市约束"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         # Mock分析结果为牛市
         with patch.object(agent, '_llm_analyze', return_value={
@@ -506,9 +544,9 @@ class TestMacroAgentConstraints:
             assert context.constraints['max_position_size'] >= 0.20
     
     @pytest.mark.asyncio
-    async def test_bear_market_constraints(self):
+    async def test_bear_market_constraints(self, mock_llm):
         """测试熊市约束"""
-        agent = MacroAgent()
+        agent = MacroAgent(llm_client=mock_llm)
         
         # Mock分析结果为熊市
         with patch.object(agent, '_llm_analyze', return_value={

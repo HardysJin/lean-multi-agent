@@ -377,24 +377,65 @@ def get_available_providers() -> Dict[str, bool]:
 
 class MockLLM:
     """
-    Mock LLM用于测试
+    Mock LLM 用于测试
     
-    在没有API key或测试时使用，返回固定响应。
+    提供完整的测试功能：
+    - 固定响应或自定义响应函数
+    - 调用计数和历史记录
+    - 模拟同步/异步调用
+    
+    用法：
+        # 固定响应
+        mock = MockLLM(response="Mocked response")
+        agent = MyAgent(llm_client=mock)
+        
+        # 自定义响应函数
+        def custom_response(messages, **kwargs):
+            return f"Received {len(messages)} messages"
+        mock = MockLLM(response_func=custom_response)
     """
     
-    def __init__(self, response: str = "Mock LLM response"):
+    def __init__(self, response: str = "Mock LLM response", response_func=None):
+        """
+        初始化 Mock LLM
+        
+        Args:
+            response: 固定返回的响应（如果 response_func 为 None）
+            response_func: 自定义响应函数 (messages, **kwargs) -> str
+        """
         self.response = response
+        self.response_func = response_func
         self.temperature = 0.0
         self.model_name = "mock-llm"
+        
+        # 测试辅助属性
+        self.call_count = 0
+        self.call_history = []
     
-    def invoke(self, messages):
+    def invoke(self, messages, **kwargs):
         """模拟LangChain的invoke接口"""
         from langchain_core.messages import AIMessage
-        return AIMessage(content=self.response)
+        from datetime import datetime
+        
+        # 记录调用
+        self.call_count += 1
+        self.call_history.append({
+            'messages': messages,
+            'kwargs': kwargs,
+            'timestamp': datetime.now()
+        })
+        
+        # 生成响应
+        if self.response_func:
+            content = self.response_func(messages, **kwargs)
+        else:
+            content = self.response
+        
+        return AIMessage(content=content)
     
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
         """模拟异步调用"""
-        return self.invoke(messages)
+        return self.invoke(messages, **kwargs)
 
 
 def get_mock_llm(response: str = "Mock response") -> MockLLM:

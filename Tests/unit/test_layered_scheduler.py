@@ -19,7 +19,7 @@ from Agents.decision_makers import (
     TacticalDecisionMaker,
     Decision
 )
-from Agents.macro_agent import MacroContext
+from Agents.core import MacroContext
 from Agents.sector_agent import SectorContext
 
 

@@ -7,7 +7,7 @@ from unittest.mock import Mock, AsyncMock
 from datetime import datetime
 
 from Agents.meta_agent import MetaAgent
-from Agents.macro_agent import MacroAgent, MacroContext
+from Agents.core import MacroAgent, MacroContext
 from Agents.sector_agent import SectorAgent, SectorContext
 
 

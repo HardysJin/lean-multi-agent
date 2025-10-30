@@ -21,7 +21,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 from dataclasses import dataclass
 
-from Agents.macro_agent import MacroAgent, MacroContext
+from Agents.core import MacroAgent, MacroContext
 from Agents.sector_agent import SectorAgent, SectorContext
 from Agents.meta_agent import MetaAgent, MetaDecision
 
