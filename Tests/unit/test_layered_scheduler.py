@@ -20,7 +20,7 @@ from Agents.decision_makers import (
     Decision
 )
 from Agents.core import MacroContext
-from Agents.sector_agent import SectorContext
+from Agents.core import SectorContext
 
 
 # ===== Fixtures =====

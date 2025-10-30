@@ -8,7 +8,7 @@ from datetime import datetime
 
 from Agents.meta_agent import MetaAgent
 from Agents.core import MacroAgent, MacroContext
-from Agents.sector_agent import SectorAgent, SectorContext
+from Agents.core import SectorAgent, SectorContext
 
 
 class TestMetaAgentWithContext:

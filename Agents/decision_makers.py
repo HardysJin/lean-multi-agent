@@ -22,7 +22,7 @@ from datetime import datetime
 from dataclasses import dataclass
 
 from Agents.core import MacroAgent, MacroContext
-from Agents.sector_agent import SectorAgent, SectorContext
+from Agents.core import SectorAgent, SectorContext
 from Agents.meta_agent import MetaAgent, MetaDecision
 
 

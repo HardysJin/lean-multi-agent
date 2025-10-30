@@ -20,7 +20,6 @@ Legacy (Old Implementation):
 from .base_mcp_agent import BaseMCPAgent, ExampleAgent
 from .technical_agent import TechnicalAnalysisAgent
 from .news_agent import NewsAgent, NewsArticle, NewsSentimentReport
-from .sector_agent import SectorAgent, SectorContext
 from .meta_agent import MetaAgent, MetaDecision, ToolCall, create_meta_agent_with_technical
 from .decision_makers import (
     StrategicDecisionMaker,
@@ -43,7 +42,7 @@ from .utils.llm_config import (
 )
 
 # 重新导出 core 模块（新架构）
-from .core import MacroAgent, MacroContext
+from .core import MacroAgent, MacroContext, SectorAgent, SectorContext, SECTOR_MAPPING
 
 __all__ = [
     # MCP-based Agents
@@ -53,8 +52,6 @@ __all__ = [
     'NewsAgent',
     'NewsArticle',
     'NewsSentimentReport',
-    'SectorAgent',
-    'SectorContext',
     'MetaAgent',
     'MetaDecision',
     'ToolCall',
@@ -63,6 +60,9 @@ __all__ = [
     # Core Business Logic (New Architecture)
     'MacroAgent',
     'MacroContext',
+    'SectorAgent',
+    'SectorContext',
+    'SECTOR_MAPPING',
     
     # DecisionMakers
     'StrategicDecisionMaker',

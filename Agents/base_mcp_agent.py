@@ -26,7 +26,7 @@ import asyncio
 import logging
 import json
 
-from Agents.llm_config import get_default_llm, LLMConfig
+from Agents.utils.llm_config import get_default_llm, LLMConfig
 
 
 class BaseMCPAgent:

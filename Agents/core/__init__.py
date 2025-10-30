@@ -11,6 +11,7 @@ Core Agents - 纯业务逻辑层
 
 from .base_agent import BaseAgent
 from .macro_agent import MacroAgent, MacroContext
+from .sector_agent import SectorAgent, SectorContext, SECTOR_MAPPING
 
 # 重新导出测试工具
 from Agents.utils.llm_config import MockLLM
@@ -19,5 +20,8 @@ __all__ = [
     'BaseAgent',
     'MacroAgent',
     'MacroContext',
+    'SectorAgent',
+    'SectorContext',
+    'SECTOR_MAPPING',
     'MockLLM',  # 测试工具
 ]

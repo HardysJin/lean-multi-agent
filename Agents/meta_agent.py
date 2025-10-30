@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
-from Agents.llm_config import get_default_llm, LLMConfig
+from Agents.utils.llm_config import get_default_llm, LLMConfig
 
 import asyncio
 import json
@@ -24,7 +24,7 @@ from mcp.client.stdio import stdio_client
 
 from Memory.state_manager import MultiTimeframeStateManager
 from Memory.schemas import DecisionRecord, Timeframe
-from Agents.llm_config import get_default_llm, LLMConfig
+from Agents.utils.llm_config import get_default_llm, LLMConfig
 
 
 @dataclass

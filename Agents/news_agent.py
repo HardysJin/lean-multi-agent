@@ -42,7 +42,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from mcp.types import Tool, Resource, TextContent
 from Agents.base_mcp_agent import BaseMCPAgent
-from Agents.llm_config import LLMConfig
+from Agents.utils.llm_config import LLMConfig
 
 
 @dataclass
