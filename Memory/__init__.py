@@ -32,6 +32,13 @@ from .state_manager import (
     create_state_manager,
 )
 
+from .escalation import (
+    EscalationDetector,
+    EscalationTrigger,
+    EscalationTriggerType,
+    should_trigger_escalation,
+)
+
 __all__ = [
     'Timeframe',
     'DecisionRecord',
@@ -45,4 +52,8 @@ __all__ = [
     'create_sql_store',
     'MultiTimeframeStateManager',
     'create_state_manager',
+    'EscalationDetector',
+    'EscalationTrigger',
+    'EscalationTriggerType',
+    'should_trigger_escalation',
 ]

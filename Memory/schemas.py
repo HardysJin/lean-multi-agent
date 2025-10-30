@@ -151,6 +151,27 @@ class DecisionRecord:
     # === 元数据 ===
     metadata: Dict[str, Any] = field(default_factory=dict)  # 其他元数据
     
+    # === 回测时间控制（防止Look-Ahead Bias）===
+    visible_data_end: Optional[datetime] = None  # 可见数据截止时间（回测模式专用）
+    # 在回测模式下，这个字段确保决策只能基于 <= visible_data_end 的数据
+    # 实盘模式下为 None（使用实时数据）
+    
+    # === 计算模式（性能优化）===
+    computation_mode: str = 'full'  # 计算模式: full/hybrid/fast
+    # - full: 完整Multi-Agent（所有Agent + LLM）
+    # - hybrid: 混合模式（部分Agent + LLM）
+    # - fast: 快速模式（仅规则引擎，无LLM）
+    
+    # === 缓存支持 ===
+    cache_key: Optional[str] = None  # 信号缓存键
+    # 用于标识可复用的计算结果，避免重复计算
+    # 格式: f"{symbol}_{timeframe}_{strategy_hash}_{data_hash}"
+    
+    # === 反向传导（Escalation）===
+    escalated_from: Optional[str] = None  # 如果是反向传导触发，记录来源时间尺度
+    escalation_trigger: Optional[str] = None  # 触发反向传导的原因
+    escalation_score: Optional[float] = None  # 触发评分（0-10）
+    
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（用于存储）"""
         data = asdict(self)
@@ -160,6 +181,8 @@ class DecisionRecord:
             data['execution_time'] = self.execution_time.isoformat()
         if self.exit_time:
             data['exit_time'] = self.exit_time.isoformat()
+        if self.visible_data_end:
+            data['visible_data_end'] = self.visible_data_end.isoformat()
         # 转换Timeframe为字符串
         data['timeframe'] = self.timeframe.display_name
         return data
@@ -173,6 +196,8 @@ class DecisionRecord:
             data['execution_time'] = datetime.fromisoformat(data['execution_time'])
         if data.get('exit_time'):
             data['exit_time'] = datetime.fromisoformat(data['exit_time'])
+        if data.get('visible_data_end'):
+            data['visible_data_end'] = datetime.fromisoformat(data['visible_data_end'])
         # 转换字符串为Timeframe
         data['timeframe'] = Timeframe.from_string(data['timeframe'])
         return cls(**data)
@@ -237,6 +262,55 @@ class DecisionRecord:
                 self.outcome = 'neutral'
         else:
             self.outcome = 'ongoing'
+    
+    def is_backtest_mode(self) -> bool:
+        """判断是否为回测模式"""
+        return self.visible_data_end is not None
+    
+    def validate_data_timestamp(self, data_timestamp: datetime) -> bool:
+        """
+        验证数据时间戳是否在可见范围内（防止Look-Ahead）
+        
+        Args:
+            data_timestamp: 要验证的数据时间戳
+        
+        Returns:
+            True if data is visible (safe to use), False if future data (look-ahead)
+        """
+        if not self.is_backtest_mode():
+            return True  # 实盘模式，所有实时数据都可用
+        
+        return data_timestamp <= self.visible_data_end
+    
+    def mark_as_escalated(self, from_timeframe: str, trigger: str, score: float):
+        """
+        标记为反向传导触发的决策
+        
+        Args:
+            from_timeframe: 来源时间尺度（如 'tactical'）
+            trigger: 触发原因（如 'market_shock', 'news_impact'）
+            score: 触发评分（0-10，表示事件严重程度）
+        """
+        self.escalated_from = from_timeframe
+        self.escalation_trigger = trigger
+        self.escalation_score = score
+        self.metadata['escalated'] = True
+        self.metadata['escalation_details'] = {
+            'from': from_timeframe,
+            'trigger': trigger,
+            'score': score,
+            'escalated_at': datetime.now().isoformat()
+        }
+    
+    def set_cache_key(self, strategy_version: str, data_hash: str):
+        """
+        设置缓存键
+        
+        Args:
+            strategy_version: 策略版本（如 'v1.0.0'）
+            data_hash: 数据哈希（唯一标识输入数据）
+        """
+        self.cache_key = f"{self.symbol}_{self.timeframe.display_name}_{strategy_version}_{data_hash}"
 
 
 @dataclass
