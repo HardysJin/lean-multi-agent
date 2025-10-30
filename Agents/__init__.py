@@ -28,6 +28,13 @@ from .decision_makers import (
     DecisionMakerFactory,
     Decision
 )
+from .layered_scheduler import (
+    LayeredScheduler,
+    MultiSymbolScheduler,
+    DecisionLevel,
+    EscalationReason,
+    SchedulerState
+)
 from .llm_config import (
     LLMConfig, LLMProvider,
     get_default_llm, get_default_llm_config, set_default_llm_config,
@@ -57,6 +64,13 @@ __all__ = [
     'TacticalDecisionMaker',
     'DecisionMakerFactory',
     'Decision',
+    
+    # Scheduler
+    'LayeredScheduler',
+    'MultiSymbolScheduler',
+    'DecisionLevel',
+    'EscalationReason',
+    'SchedulerState',
     
     # LLM Configuration
     'LLMConfig',
