@@ -351,16 +351,30 @@ Connected Agents:
 {agents_info}
 
 Your role:
-1. Analyze the current situation and available context
-2. Decide which specialist agents to consult
-3. Call appropriate tools to gather information
-4. Synthesize all inputs into a final trading decision
-5. Provide clear reasoning for your decision
+1. Analyze the current situation including macro and sector context
+2. Respect all constraints provided (especially allow_long/allow_short)
+3. Decide which specialist agents to consult
+4. Call appropriate tools to gather information
+5. Synthesize all inputs into a final trading decision
+6. Provide clear reasoning for your decision
+
+Context Priority:
+1. **Constraints** (MUST follow): Risk limits, trading restrictions from macro environment
+2. **Macro Context**: Market regime, interest rates, overall risk level
+3. **Sector Context**: Industry trends, rotation signals, relative strength
+4. **Memory**: Historical decisions and patterns
+5. **Technical/News**: Individual stock analysis
+
+Constraint Enforcement:
+- If allow_long=False: DO NOT recommend BUY
+- If allow_short=False: DO NOT recommend short positions
+- If max_position_size specified: Consider position sizing
+- If max_risk_per_trade specified: Adjust conviction accordingly
 
 Trading Actions:
-- BUY: Strong evidence to enter long position
+- BUY: Strong evidence to enter long position (only if constraints allow)
 - SELL: Strong evidence to exit or enter short position  
-- HOLD: Insufficient evidence or conflicting signals
+- HOLD: Insufficient evidence, conflicting signals, or constraints prohibit action
 
 Conviction Score (1-10):
 - 1-3: Low conviction, weak signals
@@ -370,7 +384,9 @@ Conviction Score (1-10):
 
 Always consider:
 - Multiple timeframes and perspectives
-- Risk management principles
+- Risk management principles (from constraints)
+- Macro environment alignment
+- Sector trends and rotation
 - Historical context from memory
 - Confluence of signals from different agents"""
     
@@ -621,33 +637,59 @@ Always consider:
         self,
         symbol: str,
         query: Optional[str] = None,
-        additional_context: Optional[Dict[str, Any]] = None
+        additional_context: Optional[Dict[str, Any]] = None,
+        macro_context: Optional[Dict[str, Any]] = None,
+        sector_context: Optional[Dict[str, Any]] = None,
+        constraints: Optional[Dict[str, Any]] = None
     ) -> MetaDecision:
         """
         分析并做出交易决策
         
         这是Meta Agent的核心方法：
         1. 从Memory System检索上下文
-        2. 使用LLM分析situation
-        3. LLM决定调用哪些specialist工具
-        4. 综合所有信息形成最终决策
+        2. 接收宏观和行业背景
+        3. 应用约束条件
+        4. 使用LLM分析situation
+        5. LLM决定调用哪些specialist工具
+        6. 综合所有信息形成最终决策
         
         Args:
             symbol: 交易标的
             query: 可选的具体问题（如"Should I buy AAPL?"）
             additional_context: 额外的上下文信息
+            macro_context: 宏观环境背景（来自MacroAgent）
+            sector_context: 行业分析背景（来自SectorAgent）
+            constraints: 约束条件（风险控制参数）
             
         Returns:
             MetaDecision对象
         """
+        # 0. 检查约束条件（优先级最高）
+        if constraints:
+            # 检查是否允许交易
+            if not constraints.get('allow_long', True) and not constraints.get('allow_short', False):
+                # 禁止做多又禁止做空 = 只能HOLD
+                return MetaDecision(
+                    symbol=symbol,
+                    action='HOLD',
+                    conviction=10,
+                    reasoning='Market constraints prohibit all trading (熊市禁止做多)',
+                    evidence={'constraints': constraints},
+                    tool_calls=[],
+                    timestamp=datetime.now()
+                )
+        
         # 1. 检索记忆上下文
         memory_context = self._retrieve_memory_context(symbol)
         
-        # 2. 构建初始消息
+        # 2. 构建初始消息（包含宏观和行业背景）
         context_str = json.dumps({
             "symbol": symbol,
             "memory": memory_context,
-            "additional": additional_context or {}
+            "additional": additional_context or {},
+            "macro": macro_context or {},
+            "sector": sector_context or {},
+            "constraints": constraints or {}
         }, indent=2, default=str)
         
         user_message = f"""Analyze the trading opportunity for {symbol}.
