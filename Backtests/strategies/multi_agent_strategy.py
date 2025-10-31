@@ -22,11 +22,26 @@ class MultiAgentStrategy:
     - NewsAgent: 新闻情感分析
     """
     
-    def __init__(self):
-        """初始化所有 Agent"""
-        self.meta_agent = MetaAgent()
-        self.technical_agent = TechnicalAnalysisAgent()
-        self.news_agent = NewsAgent()
+    def __init__(self, use_mock_llm: bool = False):
+        """
+        初始化所有 Agent
+        
+        Args:
+            use_mock_llm: 是否使用 MockLLM（测试时使用，避免真实API调用）
+        """
+        if use_mock_llm:
+            # 测试模式：使用 MockLLM，快速且无费用
+            from Agents.utils.llm_config import get_mock_llm
+            mock_llm = get_mock_llm()
+            
+            self.meta_agent = MetaAgent(llm_client=mock_llm, enable_memory=False)
+            self.technical_agent = TechnicalAnalysisAgent()
+            self.news_agent = NewsAgent(llm_client=mock_llm)
+        else:
+            # 生产模式：使用真实 LLM
+            self.meta_agent = MetaAgent()
+            self.technical_agent = TechnicalAnalysisAgent()
+            self.news_agent = NewsAgent()
     
     async def generate_signal(
         self,

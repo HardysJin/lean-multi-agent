@@ -212,8 +212,8 @@ class TestMultiAgentStrategy:
     
     @pytest.fixture
     def strategy(self):
-        """创建策略实例"""
-        return MultiAgentStrategy()
+        """创建策略实例（使用MockLLM）"""
+        return MultiAgentStrategy(use_mock_llm=True)  # ← 关键改动：避免真实LLM调用
     
     @pytest.fixture
     def sample_data(self):
