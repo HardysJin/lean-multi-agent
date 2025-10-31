@@ -9,8 +9,7 @@ from typing import Dict, Optional
 import asyncio
 
 from Agents.meta_agent import MetaAgent
-from Agents.technical_agent import TechnicalAnalysisAgent
-from Agents.news_agent import NewsAgent
+from Agents.core import TechnicalAnalysisAgent, NewsAgent
 
 
 class MultiAgentStrategy:

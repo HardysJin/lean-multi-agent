@@ -65,9 +65,8 @@ from datetime import datetime, timedelta
 from Memory.state_manager import MultiTimeframeStateManager
 from Memory.schemas import DecisionRecord, Timeframe
 from Agents.meta_agent import MetaAgent
-from Agents.technical_agent import TechnicalAnalysisAgent
-from Agents.news_agent import NewsAgent
-from Agents.llm_config import LLMConfig, LLMProvider
+from Agents.core import TechnicalAnalysisAgent, NewsAgent
+from Agents.utils.llm_config import LLMConfig, LLMProvider
 
 
 async def test_1_langchain_tool_calling(meta: MetaAgent, symbol: str):

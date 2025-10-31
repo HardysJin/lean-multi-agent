@@ -14,7 +14,7 @@ import pytest
 import os
 from unittest.mock import patch, Mock
 
-from Agents.llm_config import (
+from Agents.utils.llm_config import (
     LLMConfig, LLMProvider,
     get_default_llm_config, get_default_llm, set_default_llm_config, reset_default_llm,
     create_llm, get_available_providers, get_mock_llm,
@@ -27,7 +27,6 @@ pytestmark = pytest.mark.skipif(
     not LANGCHAIN_AVAILABLE,
     reason="LangChain not installed"
 )
-
 
 class TestLLMProvider:
     """测试LLMProvider枚举"""
@@ -150,7 +149,7 @@ class TestLLMConfig:
 class TestLLMCreation:
     """测试LLM实例创建"""
     
-    @patch('Agents.llm_config.ChatOpenAI')
+    @patch('Agents.utils.llm_config.ChatOpenAI')
     def test_get_openai_llm(self, mock_chat):
         """测试创建OpenAI LLM"""
         config = LLMConfig(
@@ -167,7 +166,7 @@ class TestLLMCreation:
         assert call_kwargs["model"] == "gpt-4"
         assert call_kwargs["api_key"] == "test-key"
     
-    @patch('Agents.llm_config.ChatAnthropic')
+    @patch('Agents.utils.llm_config.ChatAnthropic')
     def test_get_claude_llm(self, mock_chat):
         """测试创建Claude LLM"""
         config = LLMConfig(
@@ -183,7 +182,7 @@ class TestLLMCreation:
         assert call_kwargs["model"] == "claude-3-sonnet"
         assert call_kwargs["anthropic_api_key"] == "test-key"
     
-    @patch('Agents.llm_config.ChatOpenAI')
+    @patch('Agents.utils.llm_config.ChatOpenAI')
     def test_get_deepseek_llm(self, mock_chat):
         """测试创建DeepSeek LLM（使用OpenAI接口）"""
         config = LLMConfig(
@@ -199,7 +198,7 @@ class TestLLMCreation:
         assert call_kwargs["model"] == "deepseek-chat"
         assert call_kwargs["base_url"] == "https://api.deepseek.com/v1"
     
-    @patch('Agents.llm_config.ChatOllama')
+    @patch('Agents.utils.llm_config.ChatOllama')
     def test_get_ollama_llm(self, mock_chat):
         """测试创建Ollama LLM"""
         config = LLMConfig(
@@ -259,7 +258,7 @@ class TestGlobalConfig:
         assert retrieved_config == custom_config
         assert retrieved_config.provider == LLMProvider.CLAUDE
     
-    @patch('Agents.llm_config.ChatOpenAI')
+    @patch('Agents.utils.llm_config.ChatOpenAI')
     def test_get_default_llm_singleton(self, mock_chat):
         """测试默认LLM是单例"""
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
@@ -271,7 +270,7 @@ class TestGlobalConfig:
             # 返回同一个实例（如果实现了单例）
             # 注意：由于mock，实际上每次都创建新的mock对象
     
-    @patch('Agents.llm_config.ChatOpenAI')
+    @patch('Agents.utils.llm_config.ChatOpenAI')
     def test_get_default_llm_force_new(self, mock_chat):
         """测试强制创建新LLM实例"""
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
@@ -297,7 +296,7 @@ class TestGlobalConfig:
 class TestConvenienceFunctions:
     """测试便捷函数"""
     
-    @patch('Agents.llm_config.ChatOpenAI')
+    @patch('Agents.utils.llm_config.ChatOpenAI')
     def test_create_llm_simple(self, mock_chat):
         """测试快速创建LLM"""
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
@@ -305,7 +304,7 @@ class TestConvenienceFunctions:
             
             mock_chat.assert_called_once()
     
-    @patch('Agents.llm_config.ChatOpenAI')
+    @patch('Agents.utils.llm_config.ChatOpenAI')
     def test_create_llm_with_model(self, mock_chat):
         """测试指定模型创建LLM"""
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
@@ -369,7 +368,7 @@ class TestIntegration:
         """测试后清理"""
         reset_default_llm()
     
-    @patch('Agents.llm_config.ChatOpenAI')
+    @patch('Agents.utils.llm_config.ChatOpenAI')
     def test_full_workflow(self, mock_chat):
         """测试完整工作流"""
         # 1. 设置全局配置

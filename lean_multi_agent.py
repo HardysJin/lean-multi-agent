@@ -46,10 +46,9 @@ except ImportError:
 
 # 便捷访问常用类
 from Agents.meta_agent import MetaAgent, MetaDecision
-from Agents.technical_agent import TechnicalAnalysisAgent
-from Agents.news_agent import NewsAgent
+from Agents.core import TechnicalAnalysisAgent, NewsAgent
 from Agents.base_mcp_agent import BaseMCPAgent
-from Agents.llm_config import LLMConfig, LLMProvider, get_default_llm
+from Agents.utils.llm_config import LLMConfig, LLMProvider, get_default_llm
 
 from Memory.state_manager import MultiTimeframeStateManager, create_state_manager
 from Memory.schemas import DecisionRecord, Timeframe, MemoryDocument

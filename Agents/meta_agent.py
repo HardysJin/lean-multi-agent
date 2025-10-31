@@ -1,37 +1,32 @@
 """
 Meta Agent模块
-实现MetaAgent类，作为MCP Client协调多个specialist agents
+实现MetaAgent类，协调多个specialist agents进行综合决策
+
+Meta Agent作为协调器（Orchestrator），不是专家（Specialist）：
+- 直接调用 core agents (in-process)
+- 使用 LLM 进行智能决策
+- 整合 Memory System
+- 无需 MCP 协议（未来如需要可以创建 MCP wrapper）
 """
 
 import json
 import asyncio
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
 from Agents.utils.llm_config import get_default_llm, LLMConfig
-
-import asyncio
-import json
-from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime
-from dataclasses import dataclass, asdict
-
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-
 from Memory.state_manager import MultiTimeframeStateManager
 from Memory.schemas import DecisionRecord, Timeframe
-from Agents.utils.llm_config import get_default_llm, LLMConfig
 
 
 @dataclass
 class AgentConnection:
-    """Specialist agent连接信息"""
+    """Specialist agent连接信息（in-process）"""
     name: str
-    session: ClientSession
+    instance: Any  # Agent instance (直接引用)
     tools: List[Dict[str, Any]]
     resources: List[Dict[str, Any]]
     description: str
@@ -82,15 +77,17 @@ class MetaDecision:
 
 class MetaAgent:
     """
-    Meta Agent - MCP Client
+    Meta Agent - 协调器/编排器（Orchestrator）
     
-    作为MCP Client连接所有specialist agents，协调工具调用，
-    使用LLM进行智能决策，集成Memory System。
+    直接调用 specialist agents (in-process)，协调工具调用，
+    使用 LLM 进行智能决策，集成 Memory System。
+    
+    不使用 MCP 协议（如需要可创建 MCP wrapper）。
     """
     
     def __init__(
         self,
-        llm_config: Optional[LLMConfig] = None,
+        llm_client=None,
         state_manager: Optional[MultiTimeframeStateManager] = None,
         enable_memory: bool = True
     ):
@@ -98,8 +95,8 @@ class MetaAgent:
         初始化Meta Agent
         
         Args:
-            llm_config: LLM配置（如果为None，使用全局默认，默认OpenAI）
-            state_manager: StateManager instance for memory integration (如果为None且enable_memory=True，会自动创建)
+            llm_client: LLM客户端（如果为None，使用默认）
+            state_manager: StateManager instance for memory integration
             enable_memory: 是否启用Memory System（默认True）
         """
         # Memory System - 默认启用
@@ -116,11 +113,8 @@ class MetaAgent:
         # 连接的agents
         self.agents: Dict[str, AgentConnection] = {}
         
-        # LLM client - 使用统一配置
-        if llm_config:
-            self.llm_client = llm_config.get_llm()
-        else:
-            self.llm_client = get_default_llm()
+        # LLM client
+        self.llm_client = llm_client if llm_client else get_default_llm()
         
         # 工具调用历史
         self.tool_call_history: List[ToolCall] = []
@@ -135,46 +129,146 @@ class MetaAgent:
         description: str = ""
     ) -> None:
         """
-        连接到specialist agent (in-process connection)
+        连接到specialist agent (in-process)
         
-        对于in-process的agents，直接使用其暴露的工具和资源。
+        直接使用 core agents，无需 MCP 协议。
         
         Args:
             agent_name: Agent名称
-            agent_instance: Agent实例（如TechnicalAnalysisAgent）
+            agent_instance: Core agent实例（如 MacroAgent, TechnicalAnalysisAgent）
             description: Agent描述
         """
-        # 获取agent的工具和资源
-        tools = agent_instance.get_tools() if hasattr(agent_instance, 'get_tools') else []
-        resources = agent_instance.get_resources() if hasattr(agent_instance, 'get_resources') else []
+        # 根据agent类型自动发现工具
+        tools_dict = []
+        resources_dict = []
         
-        # 转换为字典格式便于处理
-        tools_dict = [
-            {
-                'name': tool.name,
-                'description': tool.description,
-                'inputSchema': tool.inputSchema
-            }
-            for tool in tools
-        ]
+        # 通过introspection获取public方法作为工具
+        agent_class_name = agent_instance.__class__.__name__
         
-        resources_dict = [
-            {
-                'uri': str(resource.uri),
-                'name': resource.name,
-                'description': resource.description,
-                'mimeType': resource.mimeType
-            }
-            for resource in resources
-        ]
+        if agent_class_name == "TechnicalAnalysisAgent":
+            tools_dict = [
+                {
+                    'name': 'calculate_indicators',
+                    'description': 'Calculate technical indicators (RSI, MACD, etc.) for a symbol',
+                    'inputSchema': {
+                        'type': 'object',
+                        'properties': {
+                            'symbol': {'type': 'string', 'description': 'Stock symbol'},
+                            'timeframe': {'type': 'string', 'description': 'Timeframe (5min, 1h, 1d)', 'default': '1d'}
+                        },
+                        'required': ['symbol']
+                    }
+                },
+                {
+                    'name': 'generate_signals',
+                    'description': 'Generate buy/sell signals based on technical indicators',
+                    'inputSchema': {
+                        'type': 'object',
+                        'properties': {
+                            'symbol': {'type': 'string', 'description': 'Stock symbol'}
+                        },
+                        'required': ['symbol']
+                    }
+                },
+                {
+                    'name': 'detect_patterns',
+                    'description': 'Detect chart patterns (head-shoulders, double-top, etc.)',
+                    'inputSchema': {
+                        'type': 'object',
+                        'properties': {
+                            'symbol': {'type': 'string', 'description': 'Stock symbol'},
+                            'timeframe': {'type': 'string', 'description': 'Timeframe', 'default': '1d'}
+                        },
+                        'required': ['symbol']
+                    }
+                },
+                {
+                    'name': 'find_support_resistance',
+                    'description': 'Find key support and resistance levels',
+                    'inputSchema': {
+                        'type': 'object',
+                        'properties': {
+                            'symbol': {'type': 'string', 'description': 'Stock symbol'}
+                        },
+                        'required': ['symbol']
+                    }
+                }
+            ]
+            resources_dict = [
+                {
+                    'uri': f'technical://{agent_name}/cache',
+                    'name': 'Cache Status',
+                    'description': 'View cached technical data',
+                    'mimeType': 'application/json'
+                },
+                {
+                    'uri': f'technical://{agent_name}/capabilities',
+                    'name': 'Capabilities',
+                    'description': 'Available indicators and patterns',
+                    'mimeType': 'application/json'
+                }
+            ]
+        elif agent_class_name == "NewsAgent":
+            tools_dict = [
+                {
+                    'name': 'fetch_news',
+                    'description': 'Fetch news articles for symbols',
+                    'inputSchema': {
+                        'type': 'object',
+                        'properties': {
+                            'symbols': {'type': 'array', 'items': {'type': 'string'}},
+                            'max_articles': {'type': 'integer', 'default': 10}
+                        },
+                        'required': ['symbols']
+                    }
+                },
+                {
+                    'name': 'analyze_sentiment',
+                    'description': 'Analyze sentiment of news articles',
+                    'inputSchema': {
+                        'type': 'object',
+                        'properties': {
+                            'articles': {'type': 'array'}
+                        },
+                        'required': ['articles']
+                    }
+                }
+            ]
+        elif agent_class_name == "MacroAgent":
+            tools_dict = [
+                {
+                    'name': 'analyze_macro_environment',
+                    'description': 'Analyze macroeconomic environment',
+                    'inputSchema': {'type': 'object', 'properties': {}}
+                },
+                {
+                    'name': 'get_market_regime',
+                    'description': 'Determine current market regime',
+                    'inputSchema': {'type': 'object', 'properties': {}}
+                }
+            ]
+        elif agent_class_name == "SectorAgent":
+            tools_dict = [
+                {
+                    'name': 'analyze_sector',
+                    'description': 'Analyze specific sector performance',
+                    'inputSchema': {
+                        'type': 'object',
+                        'properties': {
+                            'sector': {'type': 'string'}
+                        },
+                        'required': ['sector']
+                    }
+                }
+            ]
         
-        # 创建连接（in-process模式，session就是agent实例本身）
+        # 创建连接（直接引用agent实例）
         connection = AgentConnection(
             name=agent_name,
-            session=agent_instance,  # 直接存储agent实例
+            instance=agent_instance,  # 直接存储agent实例
             tools=tools_dict,
             resources=resources_dict,
-            description=description or getattr(agent_instance, 'description', '')
+            description=description or getattr(agent_instance, 'description', agent_name)
         )
         
         self.agents[agent_name] = connection
@@ -219,7 +313,7 @@ class MetaAgent:
             raise ValueError(f"Agent '{agent_name}' not connected")
         
         connection = self.agents[agent_name]
-        agent_instance = connection.session  # 获取agent实例
+        agent_instance = connection.instance  # 获取agent实例
         
         # 验证工具存在
         tool_exists = any(t['name'] == tool_name for t in connection.tools)
@@ -229,7 +323,18 @@ class MetaAgent:
         # 执行工具
         start_time = datetime.now()
         try:
-            result = await agent_instance.handle_tool_call(tool_name, arguments)
+            # 直接调用agent的方法（不通过handle_tool_call）
+            method = getattr(agent_instance, tool_name, None)
+            if method is None:
+                raise ValueError(f"Method '{tool_name}' not found in agent '{agent_name}'")
+            
+            # 调用方法
+            result = method(**arguments)
+            
+            # 如果返回的是协程，则await
+            if hasattr(result, '__await__'):
+                result = await result
+                
             execution_time = (datetime.now() - start_time).total_seconds() * 1000
             
             # 记录工具调用
@@ -283,11 +388,26 @@ class MetaAgent:
             raise ValueError(f"Agent '{agent_name}' not connected")
         
         connection = self.agents[agent_name]
-        agent_instance = connection.session
+        agent_instance = connection.instance
         
-        # 读取资源
-        result = await agent_instance.handle_resource_read(resource_uri)
-        return result
+        # 简单实现：返回agent状态信息
+        # 实际应用中可以根据URI返回不同资源
+        if 'cache' in resource_uri:
+            return {
+                'uri': resource_uri,
+                'agent': agent_name,
+                'cache_info': getattr(agent_instance, '_cache', {})
+            }
+        elif 'capabilities' in resource_uri:
+            return {
+                'uri': resource_uri,
+                'agent': agent_name,
+                'tools': [t['name'] for t in connection.tools],
+                'description': connection.description
+            }
+        else:
+            return {'uri': resource_uri, 'agent': agent_name, 'data': 'Resource not found'}
+
     
     def _retrieve_memory_context(
         self,
@@ -885,23 +1005,24 @@ async def create_meta_agent_with_technical(
     这是一个便捷函数，用于快速设置基础配置。
     
     Args:
-        llm_config: LLM configuration (uses default if None)
+        llm_config: LLM configuration (uses default if None) - DEPRECATED, use llm_client
         state_manager: StateManager instance
-        algorithm: LEAN algorithm instance (optional)
+        algorithm: LEAN algorithm instance (optional) - DEPRECATED, not used in core agents
         
     Returns:
         配置好的MetaAgent实例
     """
-    from Agents.technical_agent import TechnicalAnalysisAgent
+    from Agents.core import TechnicalAnalysisAgent
     
-    # 创建Meta Agent
+    # 创建Meta Agent（使用新API）
     meta = MetaAgent(
-        llm_config=llm_config,
-        state_manager=state_manager
+        llm_client=llm_config.get_llm() if llm_config else None,
+        state_manager=state_manager,
+        enable_memory=state_manager is not None
     )
     
-    # 创建并连接Technical Agent
-    technical = TechnicalAnalysisAgent(algorithm=algorithm)
+    # 创建并连接Technical Agent（不需要algorithm参数）
+    technical = TechnicalAnalysisAgent()
     await meta.connect_to_agent(
         agent_name="technical",
         agent_instance=technical,
@@ -916,13 +1037,12 @@ if __name__ == "__main__":
     async def main():
         # 创建Meta Agent
         meta = MetaAgent(
-            llm_config=None,  # 使用默认LLM配置 (OpenAI)
-            state_manager=None  # 可以传入StateManager实例
+            enable_memory=False  # 使用新API
         )
         
         # 连接Technical Agent
-        from Agents.technical_agent import TechnicalAnalysisAgent
-        technical = TechnicalAnalysisAgent(algorithm=None)
+        from Agents.core import TechnicalAnalysisAgent
+        technical = TechnicalAnalysisAgent()
         await meta.connect_to_agent(
             agent_name="technical",
             agent_instance=technical,
