@@ -13,6 +13,7 @@ No MCP dependencies, easy to test and reuse.
 """
 
 from .base_agent import BaseAgent
+from Agents.utils.tool_registry import tool
 from typing import Dict, Any, Optional
 from datetime import datetime
 from dataclasses import dataclass, asdict
@@ -135,6 +136,7 @@ class MacroAgent(BaseAgent):
     # Public API
     # ═══════════════════════════════════════════════
     
+    @tool(description="Analyze macroeconomic environment and market regime")
     async def analyze_macro_environment(
         self,
         visible_data_end: Optional[datetime] = None,
@@ -168,6 +170,7 @@ class MacroAgent(BaseAgent):
         
         return context
     
+    @tool(description="Determine current market regime (bull/bear/sideways)")
     async def get_market_regime(
         self,
         visible_data_end: Optional[datetime] = None

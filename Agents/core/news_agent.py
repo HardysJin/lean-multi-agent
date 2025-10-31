@@ -13,6 +13,7 @@ News Agent - Core Business Logic (Pure Python)
 import os
 import json
 from typing import List, Dict, Any, Optional
+from Agents.utils.tool_registry import tool
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
 from collections import Counter
@@ -133,6 +134,7 @@ class NewsAgent(BaseAgent):
     # Public APIs - Business Logic
     # ═══════════════════════════════════════════════════
     
+    @tool(description="Fetch news articles for a symbol")
     async def fetch_news(
         self,
         symbol: str,
@@ -207,6 +209,7 @@ class NewsAgent(BaseAgent):
             self.logger.error(f"Error fetching news: {e}", exc_info=True)
             return self._get_mock_news(symbol, limit)
     
+    @tool(description="Analyze sentiment of news articles")
     async def analyze_sentiment(
         self,
         articles: List[NewsArticle]
@@ -271,6 +274,7 @@ class NewsAgent(BaseAgent):
             "date_range": f"last {days_back} days"
         }
     
+    @tool(description="Generate comprehensive sentiment report for a symbol")
     async def generate_sentiment_report(
         self,
         symbol: str,

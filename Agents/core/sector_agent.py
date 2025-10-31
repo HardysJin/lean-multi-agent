@@ -12,6 +12,7 @@ No MCP dependencies, easy to test and reuse.
 """
 
 from .base_agent import BaseAgent
+from Agents.utils.tool_registry import tool
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 from dataclasses import dataclass, asdict
@@ -140,6 +141,7 @@ class SectorAgent(BaseAgent):
         """
         return SECTOR_MAPPING.get(symbol, 'Unknown')
     
+    @tool(description="Analyze specific sector performance and trends")
     async def analyze_sector(
         self,
         sector: str,

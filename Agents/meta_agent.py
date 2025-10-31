@@ -18,6 +18,7 @@ from dataclasses import dataclass, asdict
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
 from Agents.utils.llm_config import get_default_llm, LLMConfig
+from Agents.utils.tool_registry import ToolRegistry
 from Memory.state_manager import MultiTimeframeStateManager
 from Memory.schemas import DecisionRecord, Timeframe
 
@@ -132,68 +133,21 @@ class MetaAgent:
         连接到specialist agent (in-process)
         
         直接使用 core agents，无需 MCP 协议。
+        使用 ToolRegistry 自动发现工具。
         
         Args:
             agent_name: Agent名称
             agent_instance: Core agent实例（如 MacroAgent, TechnicalAnalysisAgent）
             description: Agent描述
         """
-        # 根据agent类型自动发现工具
-        tools_dict = []
-        resources_dict = []
+        # 使用 ToolRegistry 自动发现工具
+        tools_dict = ToolRegistry.discover_tools(agent_instance)
         
-        # 通过introspection获取public方法作为工具
+        # 为 TechnicalAgent 添加默认 resources（其他 agent 可根据需要扩展）
+        resources_dict = []
         agent_class_name = agent_instance.__class__.__name__
         
         if agent_class_name == "TechnicalAnalysisAgent":
-            tools_dict = [
-                {
-                    'name': 'calculate_indicators',
-                    'description': 'Calculate technical indicators (RSI, MACD, etc.) for a symbol',
-                    'inputSchema': {
-                        'type': 'object',
-                        'properties': {
-                            'symbol': {'type': 'string', 'description': 'Stock symbol'},
-                            'timeframe': {'type': 'string', 'description': 'Timeframe (5min, 1h, 1d)', 'default': '1d'}
-                        },
-                        'required': ['symbol']
-                    }
-                },
-                {
-                    'name': 'generate_signals',
-                    'description': 'Generate buy/sell signals based on technical indicators',
-                    'inputSchema': {
-                        'type': 'object',
-                        'properties': {
-                            'symbol': {'type': 'string', 'description': 'Stock symbol'}
-                        },
-                        'required': ['symbol']
-                    }
-                },
-                {
-                    'name': 'detect_patterns',
-                    'description': 'Detect chart patterns (head-shoulders, double-top, etc.)',
-                    'inputSchema': {
-                        'type': 'object',
-                        'properties': {
-                            'symbol': {'type': 'string', 'description': 'Stock symbol'},
-                            'timeframe': {'type': 'string', 'description': 'Timeframe', 'default': '1d'}
-                        },
-                        'required': ['symbol']
-                    }
-                },
-                {
-                    'name': 'find_support_resistance',
-                    'description': 'Find key support and resistance levels',
-                    'inputSchema': {
-                        'type': 'object',
-                        'properties': {
-                            'symbol': {'type': 'string', 'description': 'Stock symbol'}
-                        },
-                        'required': ['symbol']
-                    }
-                }
-            ]
             resources_dict = [
                 {
                     'uri': f'technical://{agent_name}/cache',
@@ -206,59 +160,6 @@ class MetaAgent:
                     'name': 'Capabilities',
                     'description': 'Available indicators and patterns',
                     'mimeType': 'application/json'
-                }
-            ]
-        elif agent_class_name == "NewsAgent":
-            tools_dict = [
-                {
-                    'name': 'fetch_news',
-                    'description': 'Fetch news articles for symbols',
-                    'inputSchema': {
-                        'type': 'object',
-                        'properties': {
-                            'symbols': {'type': 'array', 'items': {'type': 'string'}},
-                            'max_articles': {'type': 'integer', 'default': 10}
-                        },
-                        'required': ['symbols']
-                    }
-                },
-                {
-                    'name': 'analyze_sentiment',
-                    'description': 'Analyze sentiment of news articles',
-                    'inputSchema': {
-                        'type': 'object',
-                        'properties': {
-                            'articles': {'type': 'array'}
-                        },
-                        'required': ['articles']
-                    }
-                }
-            ]
-        elif agent_class_name == "MacroAgent":
-            tools_dict = [
-                {
-                    'name': 'analyze_macro_environment',
-                    'description': 'Analyze macroeconomic environment',
-                    'inputSchema': {'type': 'object', 'properties': {}}
-                },
-                {
-                    'name': 'get_market_regime',
-                    'description': 'Determine current market regime',
-                    'inputSchema': {'type': 'object', 'properties': {}}
-                }
-            ]
-        elif agent_class_name == "SectorAgent":
-            tools_dict = [
-                {
-                    'name': 'analyze_sector',
-                    'description': 'Analyze specific sector performance',
-                    'inputSchema': {
-                        'type': 'object',
-                        'properties': {
-                            'sector': {'type': 'string'}
-                        },
-                        'required': ['sector']
-                    }
                 }
             ]
         

@@ -11,6 +11,7 @@ Technical Analysis Agent - Core Business Logic (Pure Python)
 """
 
 from Agents.core.base_agent import BaseAgent
+from Agents.utils.tool_registry import tool
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import pandas as pd
@@ -66,6 +67,7 @@ class TechnicalAnalysisAgent(BaseAgent):
     # Public APIs - Business Logic
     # ═══════════════════════════════════════════════
     
+    @tool(description="Calculate technical indicators (RSI, MACD, etc.) for a symbol")
     def calculate_indicators(
         self,
         symbol: str,
@@ -100,6 +102,7 @@ class TechnicalAnalysisAgent(BaseAgent):
         
         return indicators
     
+    @tool(description="Generate buy/sell signals based on technical indicators")
     def generate_signals(self, symbol: str) -> Dict[str, Any]:
         """
         生成交易信号
@@ -201,6 +204,7 @@ class TechnicalAnalysisAgent(BaseAgent):
             'current_price': current_price
         }
     
+    @tool(description="Detect chart patterns (head-shoulders, double-top, etc.)")
     def detect_patterns(
         self,
         symbol: str,
@@ -264,6 +268,7 @@ class TechnicalAnalysisAgent(BaseAgent):
             'lookback_days': lookback_days
         }
     
+    @tool(description="Find key support and resistance levels")
     def find_support_resistance(self, symbol: str) -> Dict[str, Any]:
         """
         识别关键支撑和阻力位
