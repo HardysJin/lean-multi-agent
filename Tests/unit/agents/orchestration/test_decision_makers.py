@@ -6,16 +6,17 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
 
-from Agents.decision_makers import (
+from Agents.orchestration import (
     StrategicDecisionMaker,
     CampaignDecisionMaker,
     TacticalDecisionMaker,
     DecisionMakerFactory,
-    Decision
+    Decision,
+    MetaAgent,
+    MetaDecision
 )
 from Agents.core import MacroAgent, MacroContext
 from Agents.core import SectorAgent, SectorContext
-from Agents.meta_agent import MetaAgent, MetaDecision
 
 
 # ===== Fixtures =====

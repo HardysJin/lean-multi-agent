@@ -18,10 +18,10 @@ from unittest.mock import Mock, MagicMock, patch, AsyncMock
 import json
 from datetime import datetime
 
-from Agents.meta_agent import (
-    MetaAgent, MetaDecision, ToolCall, AgentConnection,
-    create_meta_agent_with_technical
+from Agents.orchestration import (
+    MetaAgent, MetaDecision, AgentConnection,
 )
+from Agents.orchestration.meta_agent import ToolCall, create_meta_agent_with_technical
 from Agents.core import TechnicalAnalysisAgent
 from Agents.utils.llm_config import LLMConfig, get_mock_llm
 from Memory.state_manager import MultiTimeframeStateManager

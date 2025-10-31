@@ -500,7 +500,7 @@ class TestIntegration:
     
     def test_news_agent_with_meta_agent_integration(self, mock_llm):
         """测试与MetaAgent的集成（结构测试）"""
-        from Agents.meta_agent import MetaAgent
+        from Agents.orchestration import MetaAgent
         
         # 创建agents (都使用mock LLM)
         meta = MetaAgent(llm_client=mock_llm)

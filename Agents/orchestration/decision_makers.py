@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 from Agents.core import MacroAgent, MacroContext
 from Agents.core import SectorAgent, SectorContext
-from Agents.meta_agent import MetaAgent, MetaDecision
+from Agents.orchestration.meta_agent import MetaAgent, MetaDecision
 
 
 @dataclass

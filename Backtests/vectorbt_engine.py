@@ -12,7 +12,7 @@ from datetime import datetime
 import asyncio
 import logging
 
-from Agents.meta_agent import MetaAgent
+from Agents.orchestration import MetaAgent
 
 
 class VectorBTBacktest:

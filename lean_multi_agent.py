@@ -45,7 +45,7 @@ except ImportError:
     import Algorithm as algorithm
 
 # 便捷访问常用类
-from Agents.meta_agent import MetaAgent, MetaDecision
+from Agents.orchestration import MetaAgent, MetaDecision
 from Agents.core import TechnicalAnalysisAgent, NewsAgent
 from Agents.base_mcp_agent import BaseMCPAgent
 from Agents.utils.llm_config import LLMConfig, LLMProvider, get_default_llm

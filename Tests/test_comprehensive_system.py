@@ -64,7 +64,7 @@ from datetime import datetime, timedelta
 
 from Memory.state_manager import MultiTimeframeStateManager
 from Memory.schemas import DecisionRecord, Timeframe
-from Agents.meta_agent import MetaAgent
+from Agents.orchestration import MetaAgent
 from Agents.core import TechnicalAnalysisAgent, NewsAgent
 from Agents.utils.llm_config import LLMConfig, LLMProvider
 

@@ -8,7 +8,7 @@ import pandas as pd
 from typing import Dict, Optional
 import asyncio
 
-from Agents.meta_agent import MetaAgent
+from Agents.orchestration import MetaAgent
 from Agents.core import TechnicalAnalysisAgent, NewsAgent
 
 
