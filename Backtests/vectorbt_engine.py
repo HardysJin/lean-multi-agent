@@ -1,28 +1,90 @@
 """
 VectorBT 回测引擎
 
-提供基于 VectorBT 的高性能回测功能
+功能：
+1. 仓位管理 - 动态调整持仓大小
+2. 加减仓 - 不只是买入/卖出，还有增加/减少仓位
+3. LLM决策仓位大小 - 根据conviction调整
+4. 完整的性能指标 - 持仓、PnL、费用等
 """
 
 import vectorbt as vbt
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 from datetime import datetime
-import asyncio
 import logging
 
-from Agents.orchestration import MetaAgent
+logger = logging.getLogger(__name__)
+
+
+def convert_layered_signals(signals_dict: Dict[str, List[Dict]]) -> Dict[str, List['Signal']]:
+    """
+    转换 LayeredStrategy 信号字典到 Signal 对象
+    
+    Args:
+        signals_dict: {symbol: [signal_dict, ...]}
+        
+    Returns:
+        {symbol: [Signal, ...]}
+    """
+    result = {}
+    for symbol, signals in signals_dict.items():
+        result[symbol] = [Signal.from_layered_strategy_signal(s) for s in signals]
+    return result
+
+
+class Signal:
+    """
+    交易信号
+    
+    Attributes:
+        action: BUY, SELL, HOLD, ADD (加仓), REDUCE (减仓)
+        size: 仓位大小 (0.0-1.0，表示资金的百分比)
+        confidence: 信心水平 (0.0-1.0)
+        reason: 决策原因
+    """
+    def __init__(
+        self,
+        action: str,
+        size: float = 0.0,
+        confidence: float = 0.5,
+        reason: str = ""
+    ):
+        self.action = action.upper()
+        self.size = max(0.0, min(1.0, size))  # 限制在 0-1
+        self.confidence = max(0.0, min(1.0, confidence))
+        self.reason = reason
+    
+    @classmethod
+    def from_layered_strategy_signal(cls, signal: Dict):
+        """从 LayeredStrategy 信号创建 Signal"""
+        action = signal.get('action', 'HOLD')
+        confidence = signal.get('confidence', 0.5)
+        
+        # 根据 confidence 计算仓位大小
+        # 高信心 = 大仓位，低信心 = 小仓位
+        if action == 'BUY':
+            # confidence 0.5-1.0 映射到 size 0.1-0.3 (保守策略)
+            size = 0.1 + (confidence - 0.5) * 0.4  # 10%-30%
+        elif action == 'SELL':
+            size = 1.0  # 卖出全部
+        else:
+            size = 0.0  # HOLD
+        
+        return cls(
+            action=action,
+            size=size,
+            confidence=confidence,
+            reason=signal.get('reason', '')
+        )
 
 
 class VectorBTBacktest:
     """
     VectorBT 回测引擎
     
-    功能：
-    - 批量信号预计算（避免实时 LLM 调用）
-    - 多股票回测
-    - 性能分析和报告生成
+    支持仓位管理和详细的性能分析
     """
     
     def __init__(
@@ -31,195 +93,58 @@ class VectorBTBacktest:
         start_date: str,
         end_date: str,
         initial_cash: float = 100000.0,
-        fees: float = 0.001  # 0.1% 手续费
+        fees: float = 0.001,
+        max_position_size: float = 0.3  # 单个股票最大仓位 30%
     ):
-        """
-        初始化回测引擎
-        
-        Args:
-            symbols: 股票代码列表，如 ['AAPL', 'MSFT']
-            start_date: 开始日期，格式 'YYYY-MM-DD'
-            end_date: 结束日期，格式 'YYYY-MM-DD'
-            initial_cash: 初始资金
-            fees: 交易手续费比例
-        """
         self.symbols = symbols
         self.start_date = start_date
         self.end_date = end_date
         self.initial_cash = initial_cash
         self.fees = fees
-        
-        self.logger = logging.getLogger(__name__)
-        
-        # 数据缓存
-        self._price_data = None
-        self._signals = None
-        self._portfolios = None
-        
-        # Meta Agent (用于生成信号)
-        self.meta_agent = None
-    
-    def load_data(self) -> Dict[str, pd.DataFrame]:
-        """
-        加载股票数据
-        
-        Returns:
-            Dict[symbol, DataFrame]: 每个股票的 OHLCV 数据
-        """
-        self.logger.info(f"Loading data for {len(self.symbols)} symbols...")
+        self.max_position_size = max_position_size
         
         self._price_data = {}
+        self._signals = {}  # Signal 对象
+        self._portfolios = {}
+        
+        self.logger = logging.getLogger(__name__)
+    
+    def load_data(self):
+        """加载历史数据"""
+        import yfinance as yf
+        
+        self.logger.info(f"Loading data for {len(self.symbols)} symbols...")
         
         for symbol in self.symbols:
             try:
-                # 使用 yfinance 下载数据
-                data = vbt.YFData.download(
-                    symbol,
-                    start=self.start_date,
-                    end=self.end_date
-                )
+                ticker = yf.Ticker(symbol)
+                df = ticker.history(start=self.start_date, end=self.end_date)
                 
-                self._price_data[symbol] = data.get()
-                self.logger.info(f"✅ Loaded {symbol}: {len(data.get())} bars")
+                if df.empty:
+                    self.logger.warning(f"⚠️  No data for {symbol}")
+                    continue
                 
+                self._price_data[symbol] = df
+                self.logger.info(f"✅ Loaded {symbol}: {len(df)} bars")
             except Exception as e:
                 self.logger.error(f"❌ Failed to load {symbol}: {e}")
-                continue
         
         return self._price_data
     
-    async def precompute_signals(
+    def run_backtest_with_sizing(
         self,
-        strategy_func=None,
-        use_meta_agent: bool = True,
-        progress_callback=None
-    ) -> Dict[str, pd.Series]:
-        """
-        预计算所有交易信号
-        
-        Args:
-            strategy_func: 自定义策略函数 (symbol, date, price) -> signal
-            use_meta_agent: 是否使用 MetaAgent 生成信号
-            progress_callback: 进度回调函数 (symbol, current, total, message)
-        
-        Returns:
-            Dict[symbol, Series]: 每个股票的信号序列 (1=BUY, 0=SELL/HOLD)
-        """
-        self.logger.info("Precomputing trading signals...")
-        
-        if not self._price_data:
-            self.load_data()
-        
-        # 初始化 Meta Agent
-        if use_meta_agent and self.meta_agent is None:
-            self.meta_agent = MetaAgent()
-            if progress_callback:
-                progress_callback(None, 0, 0, "初始化 Meta Agent...")
-        
-        self._signals = {}
-        
-        for symbol in self.symbols:
-            if symbol not in self._price_data:
-                continue
-            
-            df = self._price_data[symbol]
-            close_prices = df['Close']
-            
-            self.logger.info(f"Computing signals for {symbol} ({len(close_prices)} days)...")
-            if progress_callback:
-                progress_callback(symbol, 0, len(close_prices), f"开始分析 {symbol}")
-            
-            signals = []
-            
-            for idx, (date, price) in enumerate(close_prices.items()):
-                # 显示进度
-                if (idx + 1) % 10 == 0 or idx == 0:
-                    self.logger.info(f"  {symbol}: {idx + 1}/{len(close_prices)} days")
-                    if progress_callback:
-                        progress_callback(
-                            symbol, 
-                            idx + 1, 
-                            len(close_prices), 
-                            f"分析 {symbol} ({date.strftime('%Y-%m-%d')})"
-                        )
-                
-                try:
-                    if use_meta_agent:
-                        # 使用 MetaAgent 生成信号
-                        signal = await self._get_meta_agent_signal(symbol, date, price)
-                    elif strategy_func:
-                        # 使用自定义策略
-                        signal = strategy_func(symbol, date, price, df.loc[:date])
-                    else:
-                        # 默认：简单移动平均策略
-                        signal = self._simple_ma_strategy(df.loc[:date])
-                    
-                    signals.append(signal)
-                
-                except Exception as e:
-                    self.logger.warning(f"Signal generation failed for {symbol} on {date}: {e}")
-                    signals.append(0)  # 默认 HOLD
-            
-            # 转换为 pandas Series
-            self._signals[symbol] = pd.Series(signals, index=close_prices.index)
-            self.logger.info(f"✅ {symbol}: Generated {sum(signals)} BUY signals")
-        
-        return self._signals
-    
-    async def _get_meta_agent_signal(
-        self,
-        symbol: str,
-        date: pd.Timestamp,
-        price: float
-    ) -> int:
-        """
-        使用 MetaAgent 生成交易信号
-        
-        Returns:
-            1 = BUY, 0 = SELL/HOLD
-        """
-        decision = await self.meta_agent.analyze_and_decide(
-            symbol=symbol,
-            query=f"Analyze {symbol} on {date.date()} at price ${price:.2f}. Should I buy?"
-        )
-        
-        return 1 if decision.action == "BUY" else 0
-    
-    def _simple_ma_strategy(self, historical_data: pd.DataFrame) -> int:
-        """
-        简单移动平均策略（备用）
-        
-        策略：当短期均线 > 长期均线时买入
-        """
-        if len(historical_data) < 50:
-            return 0
-        
-        close = historical_data['Close']
-        sma20 = close.rolling(20).mean().iloc[-1]
-        sma50 = close.rolling(50).mean().iloc[-1]
-        
-        return 1 if sma20 > sma50 else 0
-    
-    def run_backtest(
-        self,
-        signals: Optional[Dict[str, pd.Series]] = None
+        signals: Dict[str, List[Signal]]
     ) -> Dict[str, vbt.Portfolio]:
         """
-        运行回测
+        运行支持仓位大小的回测
         
         Args:
-            signals: 预计算的信号，如果为 None 则使用已缓存的信号
+            signals: Dict[symbol, List[Signal]]
         
         Returns:
-            Dict[symbol, Portfolio]: 每个股票的回测结果
+            Dict[symbol, Portfolio]
         """
-        if signals is None:
-            signals = self._signals
-        
-        if not signals:
-            raise ValueError("No signals available. Run precompute_signals() first.")
-        
-        self.logger.info("Running backtest...")
+        self.logger.info("Running enhanced backtest with position sizing...")
         
         self._portfolios = {}
         
@@ -228,246 +153,186 @@ class VectorBTBacktest:
                 continue
             
             df = self._price_data[symbol]
-            signal_series = signals[symbol]
+            signal_list = signals[symbol]
             
-            # 使用 VectorBT 运行回测
-            portfolio = vbt.Portfolio.from_signals(
-                close=df['Close'],
-                entries=signal_series == 1,  # BUY signals
-                exits=signal_series == 0,    # SELL/HOLD signals
-                init_cash=self.initial_cash,
-                fees=self.fees,
-                freq='1D'
+            # 转换 Signal 为 VectorBT 格式
+            entries, exits, size_array = self._convert_signals_to_vectorbt(
+                signal_list,
+                len(df)
             )
             
-            self._portfolios[symbol] = portfolio
-            
-            # 打印简单统计
-            total_return = portfolio.total_return()
-            self.logger.info(f"✅ {symbol}: Total Return = {total_return:.2%}")
+            # 运行回测
+            try:
+                # VectorBT 支持的 size_type:
+                # 'amount' - 股票数量
+                # 'value' - 金额
+                # 'percent' - 当前资金的百分比
+                portfolio = vbt.Portfolio.from_signals(
+                    close=df['Close'],
+                    entries=entries,
+                    exits=exits,
+                    size=size_array,  # 动态仓位大小
+                    size_type='percent',  # 使用百分比方式
+                    init_cash=self.initial_cash,
+                    fees=self.fees,
+                    freq='1D'
+                )
+                
+                self._portfolios[symbol] = portfolio
+                
+                # 打印详细统计
+                stats = self._get_detailed_stats(portfolio, symbol)
+                self._log_stats(symbol, stats)
+                
+            except Exception as e:
+                self.logger.error(f"Failed to run backtest for {symbol}: {e}")
         
         return self._portfolios
     
-    def get_performance_stats(self, symbol: Optional[str] = None) -> Dict:
+    def _convert_signals_to_vectorbt(
+        self,
+        signals: List[Signal],
+        length: int
+    ) -> Tuple[pd.Series, pd.Series, pd.Series]:
         """
-        获取性能统计
-        
-        Args:
-            symbol: 指定股票代码，如果为 None 则返回所有股票的统计
+        转换 Signal 为 VectorBT 格式
         
         Returns:
-            性能指标字典
+            (entries, exits, sizes)
         """
-        if symbol:
-            if symbol not in self._portfolios:
-                raise ValueError(f"No backtest results for {symbol}")
-            
-            portfolio = self._portfolios[symbol]
-            return self._extract_stats(symbol, portfolio)
-        else:
-            # 返回所有股票的统计
-            all_stats = {}
-            for sym, portfolio in self._portfolios.items():
-                all_stats[sym] = self._extract_stats(sym, portfolio)
-            return all_stats
+        entries = []
+        exits = []
+        sizes = []
+        
+        for signal in signals:
+            if signal.action == 'BUY':
+                entries.append(True)
+                exits.append(False)
+                # 转换为百分比 (0.1 -> 10%)
+                sizes.append(signal.size * 100)
+            elif signal.action == 'SELL':
+                entries.append(False)
+                exits.append(True)
+                sizes.append(0.0)
+            else:  # HOLD
+                entries.append(False)
+                exits.append(False)
+                sizes.append(0.0)
+        
+        # 确保长度匹配
+        while len(entries) < length:
+            entries.append(False)
+            exits.append(False)
+            sizes.append(0.0)
+        
+        return (
+            pd.Series(entries[:length]),
+            pd.Series(exits[:length]),
+            pd.Series(sizes[:length])
+        )
     
-    def _extract_stats(self, symbol: str, portfolio: vbt.Portfolio) -> Dict:
-        """提取详细统计指标"""
-        stats = portfolio.stats()
-        
-        return {
-            'symbol': symbol,
-            'start_date': self.start_date,
-            'end_date': self.end_date,
-            'initial_cash': self.initial_cash,
+    def _get_detailed_stats(
+        self,
+        portfolio: vbt.Portfolio,
+        symbol: str
+    ) -> Dict:
+        """获取详细的回测统计"""
+        try:
+            # VectorBT返回Series，需要提取标量值
+            def extract_value(val):
+                """提取标量值"""
+                if isinstance(val, pd.Series):
+                    return val.iloc[0] if len(val) > 0 else 0.0
+                return val
             
-            # 收益指标
-            'total_return': float(portfolio.total_return()),
-            'total_return_pct': f"{portfolio.total_return():.2%}",
-            'annualized_return': float(stats['Annualized Return [%]']) / 100 if 'Annualized Return [%]' in stats else None,
+            # 使用stats()方法获取完整统计
+            full_stats = portfolio.stats()
             
-            # 风险指标
-            'max_drawdown': float(stats['Max Gross Exposure [%]']) / 100 if 'Max Gross Exposure [%]' in stats else None,
-            'sharpe_ratio': float(portfolio.sharpe_ratio()) if hasattr(portfolio, 'sharpe_ratio') else None,
-            
-            # 交易统计
-            'total_trades': int(stats['Total Trades']) if 'Total Trades' in stats else 0,
-            'win_rate': float(stats['Win Rate [%]']) / 100 if 'Win Rate [%]' in stats else None,
-            
-            # 最终值
-            'final_value': float(portfolio.total_return() * self.initial_cash + self.initial_cash),
-            'profit_loss': float(portfolio.total_return() * self.initial_cash),
-            
-            # 完整统计
-            'full_stats': stats
-        }
-    
-    def generate_report(self, output_dir: str = "Results") -> Dict[str, str]:
-        """
-        生成回测报告
-        
-        Args:
-            output_dir: 输出目录
-        
-        Returns:
-            报告文件路径字典
-        """
-        import os
-        os.makedirs(output_dir, exist_ok=True)
-        
-        report_files = {}
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        for symbol, portfolio in self._portfolios.items():
-            # 生成 HTML 报告
-            report_path = f"{output_dir}/{symbol}_backtest_{timestamp}.html"
-            
-            try:
-                # VectorBT 内置绘图 - 使用非交互式模式
-                import plotly.graph_objects as go
-                from plotly.subplots import make_subplots
-                
-                # 创建基本的性能图表（非 FigureWidget）
-                fig = make_subplots(
-                    rows=2, cols=1,
-                    subplot_titles=('Portfolio Value', 'Daily Returns'),
-                    row_heights=[0.7, 0.3],
-                    vertical_spacing=0.1
-                )
-                
-                # 获取数据
-                portfolio_value = portfolio.value()
-                returns = portfolio.returns()
-                
-                # 添加 Portfolio Value 曲线
-                fig.add_trace(
-                    go.Scatter(
-                        x=portfolio_value.index,
-                        y=portfolio_value.values,
-                        name='Portfolio Value',
-                        line=dict(color='blue', width=2)
-                    ),
-                    row=1, col=1
-                )
-                
-                # 添加 Returns 柱状图
-                fig.add_trace(
-                    go.Bar(
-                        x=returns.index,
-                        y=returns.values,
-                        name='Daily Returns',
-                        marker=dict(
-                            color=returns.values,
-                            colorscale='RdYlGn',
-                            showscale=False
-                        )
-                    ),
-                    row=2, col=1
-                )
-                
-                # 设置布局
-                fig.update_layout(
-                    title=f'{symbol} Backtest Report',
-                    height=800,
-                    showlegend=True,
-                    template='plotly_white'
-                )
-                
-                fig.update_xaxes(title_text="Date", row=2, col=1)
-                fig.update_yaxes(title_text="Value ($)", row=1, col=1)
-                fig.update_yaxes(title_text="Returns", row=2, col=1)
-                
-                # 保存为静态 HTML
-                fig.write_html(report_path)
-                
-                report_files[symbol] = report_path
-                self.logger.info(f"📊 Report saved: {report_path}")
-                
-            except Exception as e:
-                self.logger.warning(f"Could not generate HTML report for {symbol}: {e}")
-                # 即使图表失败，也继续生成 JSON 报告
-                report_files[symbol] = None
-        
-        # 生成汇总 JSON
-        summary_path = f"{output_dir}/backtest_summary_{timestamp}.json"
-        summary = {
-            'timestamp': timestamp,
-            'config': {
-                'symbols': self.symbols,
-                'start_date': self.start_date,
-                'end_date': self.end_date,
+            stats = {
+                'symbol': symbol,
                 'initial_cash': self.initial_cash,
-                'fees': self.fees
-            },
-            'results': self.get_performance_stats()
-        }
+                'final_value': extract_value(portfolio.final_value()),
+                'total_return': extract_value(portfolio.total_return()),
+                'total_trades': extract_value(full_stats.get('Total Trades', 0)),
+                'win_rate': extract_value(full_stats.get('Win Rate [%]', 0)) / 100.0,
+                'max_drawdown': extract_value(full_stats.get('Max Drawdown [%]', 0)) / 100.0,
+                'sharpe_ratio': extract_value(full_stats.get('Sharpe Ratio', 0)),
+                'total_fees': extract_value(full_stats.get('Total Fees Paid', 0)),
+            }
+        except Exception as e:
+            self.logger.warning(f"Failed to compute some stats: {e}")
+            stats = {
+                'symbol': symbol,
+                'initial_cash': self.initial_cash,
+                'final_value': self.initial_cash,
+                'total_return': 0.0,
+                'total_trades': 0,
+            }
         
-        import json
-        with open(summary_path, 'w') as f:
-            json.dump(summary, f, indent=2, default=str)
-        
-        report_files['summary'] = summary_path
-        self.logger.info(f"📄 Summary saved: {summary_path}")
-        
-        return report_files
+        return stats
     
-    def plot(self, symbol: Optional[str] = None):
-        """
-        绘制回测结果
+    def _log_stats(self, symbol: str, stats: Dict):
+        """打印统计信息"""
+        self.logger.info(f"\n{'='*60}")
+        self.logger.info(f"📊 {symbol} Performance:")
+        self.logger.info(f"  Initial Cash: ${stats['initial_cash']:,.2f}")
+        self.logger.info(f"  Final Value: ${stats['final_value']:,.2f}")
+        self.logger.info(f"  Total Return: {stats['total_return']:.2%}")
+        self.logger.info(f"  Total Trades: {stats['total_trades']}")
         
-        Args:
-            symbol: 指定股票代码，如果为 None 则绘制所有
-        """
-        if symbol:
-            if symbol not in self._portfolios:
-                raise ValueError(f"No backtest results for {symbol}")
+        if stats['total_trades'] > 0:
+            self.logger.info(f"  Win Rate: {stats.get('win_rate', 0):.2%}")
+            self.logger.info(f"  Max Drawdown: {stats.get('max_drawdown', 0):.2%}")
+            self.logger.info(f"  Sharpe Ratio: {stats.get('sharpe_ratio', 0):.2f}")
             
-            self._portfolios[symbol].plot().show()
-        else:
-            # 绘制所有股票
-            for sym, portfolio in self._portfolios.items():
-                print(f"\n=== {sym} ===")
-                portfolio.plot().show()
+            # 计算净利润 (Final Value - Initial Cash)
+            net_pnl = stats['final_value'] - stats['initial_cash']
+            self.logger.info(f"  Net PnL: ${net_pnl:,.2f}")
+            self.logger.info(f"  Total Fees: ${stats.get('total_fees', 0):,.2f}")
+        
+        self.logger.info(f"{'='*60}\n")
+    
+    def get_portfolio(self, symbol: str) -> Optional[vbt.Portfolio]:
+        """获取特定股票的 portfolio"""
+        return self._portfolios.get(symbol)
+    
+    def generate_report(self, output_path: str):
+        """生成HTML报告"""
+        if not self._portfolios:
+            self.logger.warning("No portfolios to report")
+            return
+        
+        # 使用第一个 portfolio 生成报告
+        symbol = list(self._portfolios.keys())[0]
+        portfolio = self._portfolios[symbol]
+        
+        try:
+            # VectorBT 可以生成详细的HTML报告
+            fig = portfolio.plot()
+            fig.write_html(output_path)
+            self.logger.info(f"✅ Report saved to: {output_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to generate report: {e}")
 
 
-# 便捷函数
-async def quick_backtest(
-    symbols: List[str],
-    start_date: str,
-    end_date: str,
-    initial_cash: float = 100000,
-    fees: float = 0.001,
-    use_meta_agent: bool = True
-) -> VectorBTBacktest:
+def convert_signals(
+    layered_signals: Dict[str, List[Dict]]
+) -> Dict[str, List[Signal]]:
     """
-    快速回测（一步完成）
+    转换 LayeredStrategy 信号为 Signal
     
     Args:
-        symbols: 股票代码列表
-        start_date: 开始日期
-        end_date: 结束日期
-        initial_cash: 初始资金
-        fees: 手续费率
-        use_meta_agent: 是否使用 MetaAgent
+        layered_signals: Dict[symbol, List[signal_dict]]
     
     Returns:
-        完成回测的 VectorBTBacktest 对象
+        Dict[symbol, List[Signal]]
     """
-    backtest = VectorBTBacktest(
-        symbols, 
-        start_date, 
-        end_date,
-        initial_cash=initial_cash,
-        fees=fees
-    )
+    enhanced = {}
     
-    # 加载数据
-    backtest.load_data()
+    for symbol, signals in layered_signals.items():
+        enhanced[symbol] = [
+            Signal.from_layered_strategy_signal(sig)
+            for sig in signals
+        ]
     
-    # 预计算信号
-    await backtest.precompute_signals(use_meta_agent=use_meta_agent)
-    
-    # 运行回测
-    backtest.run_backtest()
-    
-    return backtest
+    return enhanced

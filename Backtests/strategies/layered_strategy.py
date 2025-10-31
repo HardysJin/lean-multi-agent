@@ -192,24 +192,30 @@ class LayeredStrategy:
         logger.info(f"Making {decision_level} decision for {symbol} on {date}")
         
         # Prepare context for decision makers
-        decision_context = {
-            "symbol": symbol,
-            "current_date": current_date,
-            "current_price": price_data.iloc[-1]["close"] if not price_data.empty else None,
-            "price_history": price_data,
-            **context
-        }
+        visible_data_end = current_date if context.get('backtest_mode') else None
         
         # Call appropriate decision maker
         try:
             if decision_level == "strategic":
-                decision = await self.strategic_dm.make_decision(decision_context)
+                decision = await self.strategic_dm.decide(
+                    symbol=symbol,
+                    visible_data_end=visible_data_end
+                )
                 self.scheduler.state.last_strategic_time = current_date
             elif decision_level == "campaign":
-                decision = await self.campaign_dm.make_decision(decision_context)
+                decision = await self.campaign_dm.decide(
+                    symbol=symbol,
+                    visible_data_end=visible_data_end
+                )
                 self.scheduler.state.last_campaign_time = current_date
             else:  # tactical
-                decision = await self.tactical_dm.make_decision(decision_context)
+                # Tactical decision maker doesn't use visible_data_end
+                decision = await self.tactical_dm.decide(
+                    symbol=symbol,
+                    inherited_constraints=None,  # Could pass constraints from upper levels
+                    inherited_macro_context=None,
+                    inherited_sector_context=None
+                )
                 self.scheduler.state.last_tactical_time = current_date
         except Exception as e:
             logger.error(f"Error making {decision_level} decision: {e}")
@@ -285,7 +291,7 @@ class LayeredStrategy:
     
     def _convert_decision_to_signal(
         self,
-        decision: Dict[str, Any],
+        decision,  # Decision object from decision makers
         symbol: str,
         date: str,
         decision_level: str,
@@ -293,11 +299,13 @@ class LayeredStrategy:
     ) -> Dict[str, Any]:
         """Convert decision maker output to trading signal format."""
         
-        # Extract action from decision
-        # Decision makers return different formats, normalize here
-        action = decision.get("action", "HOLD").upper()
-        confidence = decision.get("confidence", 0.5)
-        reason = decision.get("reason", "No specific reason provided")
+        # Extract action from Decision object
+        action = decision.action.upper() if hasattr(decision, 'action') else "HOLD"
+        conviction = decision.conviction if hasattr(decision, 'conviction') else 5.0
+        reasoning = decision.reasoning if hasattr(decision, 'reasoning') else "No reasoning provided"
+        
+        # Convert conviction (1-10) to confidence (0.0-1.0)
+        confidence = conviction / 10.0
         
         # Ensure action is valid
         if action not in ["BUY", "SELL", "HOLD"]:
@@ -311,9 +319,14 @@ class LayeredStrategy:
             "confidence": confidence,
             "decision_level": decision_level,
             "escalated": escalated,
-            "reason": reason,
+            "reason": reasoning,
             "metadata": {
-                "raw_decision": decision,
+                "raw_decision": {
+                    "action": action,
+                    "conviction": conviction,
+                    "reasoning": reasoning,
+                    "timestamp": decision.timestamp.isoformat() if hasattr(decision, 'timestamp') and decision.timestamp else None
+                },
                 "strategy": "LayeredStrategy",
                 "timestamp": datetime.now().isoformat()
             }

@@ -330,16 +330,20 @@ class TestStrategyIntegration:
                     price=row['Close'],
                     historical_data=historical_data
                 )
-                symbol_signals.append(1 if signal > 0 else 0)
+                # 转换为 Signal 格式
+                from Backtests.vectorbt_engine import Signal
+                if signal > 0:
+                    symbol_signals.append(Signal('BUY', size=0.1, confidence=0.5))
+                else:
+                    symbol_signals.append(Signal('HOLD', size=0.0, confidence=0.5))
             
-            signals[symbol] = pd.Series(symbol_signals, index=df.index)
+            signals[symbol] = symbol_signals
         
         # 运行回测
-        backtest.run_backtest(signals)
-        stats = backtest.get_performance_stats('AAPL')
+        backtest.run_backtest_with_sizing(signals)
+        portfolio = backtest.get_portfolio('AAPL')
         
-        assert stats is not None
-        assert stats['symbol'] == 'AAPL'
+        assert portfolio is not None
 
 
 if __name__ == "__main__":
