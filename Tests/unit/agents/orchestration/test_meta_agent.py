@@ -357,7 +357,8 @@ REASONING: Strong technical indicators with RSI showing oversold conditions and 
         decision = meta._parse_decision(
             symbol="AAPL",
             response=response,
-            tool_calls=[]
+            tool_calls=[],
+            decision_time=datetime.now()
         )
         
         assert decision.symbol == "AAPL"
@@ -377,7 +378,8 @@ REASONING: Overbought conditions detected."""
         decision = meta._parse_decision(
             symbol="TSLA",
             response=response,
-            tool_calls=[]
+            tool_calls=[],
+            decision_time=datetime.now()
         )
         
         assert decision.action == "SELL"
@@ -394,7 +396,8 @@ REASONING: Mixed signals, need more data."""
         decision = meta._parse_decision(
             symbol="MSFT",
             response=response,
-            tool_calls=[]
+            tool_calls=[],
+            decision_time=datetime.now()
         )
         
         assert decision.action == "HOLD"
@@ -409,7 +412,8 @@ REASONING: Mixed signals, need more data."""
         decision = meta._parse_decision(
             symbol="AAPL",
             response=response,
-            tool_calls=[]
+            tool_calls=[],
+            decision_time=datetime.now()
         )
         
         assert decision.action == "HOLD"  # 默认
@@ -436,7 +440,8 @@ REASONING: Based on technical analysis"""
         decision = meta._parse_decision(
             symbol="AAPL",
             response=response,
-            tool_calls=[tool_call]
+            tool_calls=[tool_call],
+            decision_time=datetime.now()
         )
         
         assert len(decision.tool_calls) == 1
@@ -451,14 +456,14 @@ REASONING: Based on technical analysis"""
 CONVICTION: 15
 REASONING: Test"""
         
-        decision = meta._parse_decision("AAPL", response, [])
+        decision = meta._parse_decision("AAPL", response, [], datetime.now())
         assert decision.conviction == 10  # 应该被限制在10
         
         response = """ACTION: BUY
 CONVICTION: -5
 REASONING: Test"""
         
-        decision = meta._parse_decision("AAPL", response, [])
+        decision = meta._parse_decision("AAPL", response, [], datetime.now())
         assert decision.conviction == 1  # 应该被限制在1
 
 
@@ -667,7 +672,8 @@ class TestEndToEndWorkflow:
             response=f"""ACTION: {signals['action']}
 CONVICTION: {signals['conviction']}
 REASONING: Based on technical analysis showing RSI at {indicators['indicators']['rsi']['value']}""",
-            tool_calls=meta.tool_call_history.copy()
+            tool_calls=meta.tool_call_history.copy(),
+            decision_time=datetime.now()
         )
         
         assert decision.symbol == "AAPL"

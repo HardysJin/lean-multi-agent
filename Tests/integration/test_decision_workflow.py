@@ -166,7 +166,7 @@ class TestIntegratedWorkflow:
         """
         base_time = datetime(2025, 10, 29, 9, 0)
         
-        # === Strategic层：每90天决策一次 ===
+        # === Strategic层：每30天决策一次 ===
         strategic_decision = DecisionRecord(
             id=create_decision_id("AAPL", base_time, Timeframe.STRATEGIC),
             timestamp=base_time,

@@ -338,7 +338,7 @@ class TestToolCalls:
         test_articles = [
             {
                 "title": "Company Reports Strong Earnings",
-                "description": "Quarterly results exceed expectations"
+                "description": "Monthly results exceed expectations"
             },
             {
                 "title": "Stock Price Drops on Regulatory Concerns",

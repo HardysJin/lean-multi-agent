@@ -24,7 +24,7 @@ class Timeframe(Enum):
     - EXECUTION: 执行层（1小时特征周期）
     - TACTICAL: 战术层（1天特征周期）- 主要交易决策层
     - CAMPAIGN: 战役层（1周特征周期）
-    - STRATEGIC: 战略层（90天特征周期）
+    - STRATEGIC: 战略层（30天特征周期）
     
     每个时间尺度包含：
     - name: 显示名称
@@ -36,7 +36,7 @@ class Timeframe(Enum):
     EXECUTION = ("execution", 3600)      # 1小时
     TACTICAL = ("tactical", 86400)       # 1天
     CAMPAIGN = ("campaign", 604800)      # 1周 (7天)
-    STRATEGIC = ("strategic", 7776000)   # 90天 (约3个月)
+    STRATEGIC = ("strategic", 2592000)   # 30天 (约3个月)
     
     def __init__(self, display_name: str, seconds: int):
         self.display_name = display_name

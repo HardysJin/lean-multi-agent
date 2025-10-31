@@ -4,7 +4,7 @@ Layered Scheduler - 分层调度器
 负责协调三层决策制定者（Strategic, Campaign, Tactical）的运行时机和约束传播。
 
 三层决策周期：
-- Strategic: 90天（或触发escalation）
+- Strategic: 30天（或触发escalation）
 - Campaign: 7天（或触发escalation）
 - Tactical: 每天
 
@@ -30,7 +30,7 @@ from Agents.orchestration.decision_makers import (
 
 class DecisionLevel(Enum):
     """决策层级"""
-    STRATEGIC = "strategic"  # 90天
+    STRATEGIC = "strategic"  # 30天
     CAMPAIGN = "campaign"    # 7天
     TACTICAL = "tactical"    # 每天
 
@@ -88,7 +88,7 @@ class LayeredScheduler:
         strategic_maker: StrategicDecisionMaker,
         campaign_maker: CampaignDecisionMaker,
         tactical_maker: TacticalDecisionMaker,
-        strategic_interval_days: int = 90,
+        strategic_interval_days: int = 30,
         campaign_interval_days: int = 7,
         tactical_interval_days: int = 1
     ):
@@ -364,7 +364,7 @@ class MultiSymbolScheduler:
         strategic_maker: StrategicDecisionMaker,
         campaign_maker: CampaignDecisionMaker,
         tactical_maker: TacticalDecisionMaker,
-        strategic_interval_days: int = 90,
+        strategic_interval_days: int = 30,
         campaign_interval_days: int = 7,
         tactical_interval_days: int = 1
     ):

@@ -4,7 +4,7 @@ Decision Makers - 决策制定者层
 这一层组合不同的Agent（Macro, Sector, Meta）来制定不同层级的决策。
 
 三个DecisionMaker：
-1. StrategicDecisionMaker - 战略层（90天）
+1. StrategicDecisionMaker - 战略层（30天）
    - MacroAgent + SectorAgent + MetaAgent
    - 生成长期约束和策略
    

@@ -65,7 +65,7 @@
 
 4. **TACTICAL快速模式**
    - 每天运行，但分层计算：
-     - STRATEGIC(90天): Full LLM
+     - STRATEGIC(30天): Full LLM
      - CAMPAIGN(7天): Hybrid
      - TACTICAL(每天): Fast规则 或 Full LLM（关键时刻）
 
@@ -105,7 +105,7 @@ class BacktestClock:
 ### 3. LayeredScheduler（分层调度）
 ```python
 决策频率：
-- STRATEGIC: 90天1次 → Full Multi-Agent (3次调用)
+- STRATEGIC: 30天1次 → Full Multi-Agent (3次调用)
 - CAMPAIGN: 7天1次 → Hybrid (36次调用)
 - TACTICAL: 每天 → Fast规则 (250次，但很快)
                  → 关键时刻Full LLM (约25次)
@@ -192,7 +192,7 @@ logger.print_performance_summary()  # 性能统计
            ↓
 ┌──────────┬──────────┬──────────┐
 │STRATEGIC │ CAMPAIGN │ TACTICAL │
-│(90天)    │ (7天)    │ (每天)   │
+│(30天)    │ (7天)    │ (每天)   │
 │Full LLM  │ Hybrid   │ Fast/Full│
 └──────────┴──────────┴──────────┘
            ↓
@@ -210,7 +210,7 @@ logger.print_performance_summary()  # 性能统计
 ```
 现实投资思维：
 - 不是每天重新思考整个策略
-- 战略稳定（90天看大方向）
+- 战略稳定（30天看大方向）
 - 战术灵活（每天看进出点）
 - 关键时刻重点分析
 ```

@@ -9,7 +9,7 @@
 #### 1. Memory System - 多时间尺度分层记忆系统
 - **SQL存储**: SQLite数据库存储所有交易决策（`Data/sql/trading_memory.db`）
 - **Vector存储**: ChromaDB向量数据库支持语义搜索（`Data/vector_db/chroma/`）
-- **5个时间尺度**: REALTIME(5分钟), EXECUTION(1小时), TACTICAL(1天), CAMPAIGN(1周), STRATEGIC(90天)
+- **5个时间尺度**: REALTIME(5分钟), EXECUTION(1小时), TACTICAL(1天), CAMPAIGN(1周), STRATEGIC(30天)
 - **跨会话持久化**: 系统重启后自动恢复历史数据
 - **自动存储**: 所有决策自动存入Memory，无需手动调用
 - **测试覆盖**: 88个测试全部通过 ✅

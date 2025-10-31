@@ -150,9 +150,9 @@ class TestPatternDetection:
     
     def test_detect_patterns_with_lookback(self, agent):
         """测试带回溯期的形态检测"""
-        result = agent.detect_patterns("AAPL", lookback_days=90)
+        result = agent.detect_patterns("AAPL", lookback_days=30)
         
-        assert result['lookback_days'] == 90
+        assert result['lookback_days'] == 30
     
     def test_patterns_have_confidence(self, agent):
         """测试形态包含信心度"""

@@ -99,7 +99,7 @@ tools = [
 │  • current_time: 2025-10-30                                            │
 │                                                                         │
 │  决策逻辑：                                                             │
-│  if (current_time - last_strategic_time) >= 90天:                     │
+│  if (current_time - last_strategic_time) >= 30天:                     │
 │      → 调用 StrategicDecisionMaker                                     │
 │  elif (current_time - last_campaign_time) >= 7天:                     │
 │      → 调用 CampaignDecisionMaker                                      │
@@ -114,7 +114,7 @@ tools = [
     │ Strategic        │ │ Campaign         │ │ Tactical         │
     │ DecisionMaker    │ │ DecisionMaker    │ │ DecisionMaker    │
     │                  │ │                  │ │                  │
-    │ 频率: 90天       │ │ 频率: 7天        │ │ 频率: 每天        │
+    │ 频率: 30天       │ │ 频率: 7天        │ │ 频率: 每天        │
     │ 计算: Full LLM   │ │ 计算: Hybrid     │ │ 计算: Fast/Full  │
     └──────────────────┘ └──────────────────┘ └──────────────────┘
             │                     │                     │
@@ -164,7 +164,7 @@ Day 1 (2025-10-01)
     ↓
 LayeredScheduler.run_daily()
     ↓
-检查: 距离上次Strategic = 0天 < 90天? YES
+检查: 距离上次Strategic = 0天 < 30天? YES
     ↓
 检查: 距离上次Campaign = 0天 < 7天? YES
     ↓
@@ -185,7 +185,7 @@ Day 8 (2025-10-08)
     ↓
 LayeredScheduler.run_daily()
     ↓
-检查: 距离上次Strategic = 7天 < 90天? YES
+检查: 距离上次Strategic = 7天 < 30天? YES
     ↓
 检查: 距离上次Campaign = 7天 >= 7天? YES  ✓
     ↓
@@ -218,7 +218,7 @@ Day 91 (2025-12-30)
     ↓
 LayeredScheduler.run_daily()
     ↓
-检查: 距离上次Strategic = 90天 >= 90天? YES  ✓
+检查: 距离上次Strategic = 30天 >= 30天? YES  ✓
     ↓
 运行: StrategicDecisionMaker ✓
     ↓
@@ -260,7 +260,7 @@ EscalationDetector.detect_all(...)
     ↓
 选择最高分: market_shock (10.0) → STRATEGIC
     ↓
-立即触发 StrategicDecisionMaker.decide()  [黑天鹅，不等90天]
+立即触发 StrategicDecisionMaker.decide()  [黑天鹅，不等30天]
     ↓
 StrategicDecisionMaker紧急分析
     ├─→ MacroAgent: 检测到系统性风险
@@ -310,10 +310,10 @@ class LayeredDecisionScheduler:
         self.escalation_detector = EscalationDetector()
     
     def should_run_strategic(self, current_time: datetime) -> bool:
-        """是否应该运行Strategic层（90天）"""
+        """是否应该运行Strategic层（30天）"""
         if self.last_strategic is None:
             return True
-        return (current_time - self.last_strategic).days >= 90
+        return (current_time - self.last_strategic).days >= 30
     
     def should_run_campaign(self, current_time: datetime) -> bool:
         """是否应该运行Campaign层（7天）"""
@@ -336,7 +336,7 @@ class LayeredDecisionScheduler:
         
         # === Step 1: 按频率调度 ===
         
-        # 1.1 Strategic层（90天1次）
+        # 1.1 Strategic层（30天1次）
         if self.should_run_strategic(current_time):
             strategic_decision = await self.strategic_maker.decide(
                 symbol=symbol,
@@ -454,7 +454,7 @@ class StrategicDecisionMaker:
     Strategic层决策制定者
     
     组合: MacroAgent + SectorAgent + MetaAgent
-    频率: 90天1次
+    频率: 30天1次
     """
     
     def __init__(self):
@@ -770,7 +770,7 @@ class MetaAgent(BaseMCPAgent):
 
 ```
 每只股票每天都获取宏观新闻:
-- Strategic层: 每90天 × 10只股票 × 3次 = 30次宏观分析
+- Strategic层: 每30天 × 10只股票 × 3次 = 30次宏观分析
 - Campaign层: 每7天 × 10只股票 × 36次 = 360次宏观分析
 - Tactical层: 每天 × 10只股票 × 250次 = 0次（不需要）
 
@@ -781,7 +781,7 @@ class MetaAgent(BaseMCPAgent):
 
 ```
 宏观分析结果可以复用:
-- Strategic层: 每90天 × 1次（所有股票共享） × 3次 = 3次
+- Strategic层: 每30天 × 1次（所有股票共享） × 3次 = 3次
 - Campaign层: 每7天 × 1次 × 36次 = 36次
 - Tactical层: 0次
 

@@ -8,7 +8,7 @@ This strategy demonstrates the full capabilities of the refactored orchestration
 4. Automatically adjusts decision frequency based on market conditions
 
 Decision Levels:
-- Strategic: Quarterly (90 days) - Portfolio allocation, risk management, long-term themes
+- Strategic: Monthly (30 days) - Portfolio allocation, risk management, long-term themes
 - Campaign: Weekly (7 days) - Sector rotation, position sizing, rebalancing  
 - Tactical: Daily (1 day) - Entry/exit timing, short-term adjustments
 
@@ -55,7 +55,7 @@ class LayeredStrategy:
     
     Attributes:
         scheduler (LayeredScheduler): Manages decision timing and escalation
-        strategic_dm (StrategicDecisionMaker): Quarterly portfolio decisions
+        strategic_dm (StrategicDecisionMaker): Monthly portfolio decisions
         campaign_dm (CampaignDecisionMaker): Weekly sector/position decisions
         tactical_dm (TacticalDecisionMaker): Daily entry/exit decisions
         state_manager (StateManager): Persists strategy state
@@ -130,6 +130,10 @@ class LayeredStrategy:
         }
         self.decision_history = []
         
+        # Store latest contexts from upper decision levels for inheritance
+        self.latest_strategic_decision = None
+        self.latest_campaign_decision = None
+        
         logger.info(f"LayeredStrategy initialized (mock_llm={use_mock_llm}, memory={enable_memory}, escalation={enable_escalation})")
     
     async def generate_signal(
@@ -202,19 +206,52 @@ class LayeredStrategy:
                     visible_data_end=visible_data_end
                 )
                 self.scheduler.state.last_strategic_time = current_date
+                # Store strategic decision for inheritance
+                self.latest_strategic_decision = decision
+                logger.info(f"Strategic decision stored: constraints={decision.constraints}")
+                
             elif decision_level == "campaign":
                 decision = await self.campaign_dm.decide(
                     symbol=symbol,
                     visible_data_end=visible_data_end
                 )
                 self.scheduler.state.last_campaign_time = current_date
+                # Store campaign decision for inheritance
+                self.latest_campaign_decision = decision
+                logger.info(f"Campaign decision stored: constraints={decision.constraints}")
+                
             else:  # tactical
+                # Extract inherited contexts from upper-level decisions
+                inherited_constraints = None
+                inherited_macro_context = None
+                inherited_sector_context = None
+                
+                # Inherit from most recent strategic decision
+                if self.latest_strategic_decision:
+                    inherited_constraints = self.latest_strategic_decision.constraints
+                    if self.latest_strategic_decision.macro_context:
+                        inherited_macro_context = self.latest_strategic_decision.macro_context.to_dict()
+                    if self.latest_strategic_decision.sector_context:
+                        inherited_sector_context = self.latest_strategic_decision.sector_context.to_dict()
+                    logger.info(f"Tactical inheriting from Strategic: constraints={inherited_constraints is not None}, "
+                              f"macro={inherited_macro_context is not None}, sector={inherited_sector_context is not None}")
+                
+                # Override with campaign decision if available (more recent)
+                if self.latest_campaign_decision:
+                    if self.latest_campaign_decision.constraints:
+                        inherited_constraints = self.latest_campaign_decision.constraints
+                    if self.latest_campaign_decision.macro_context:
+                        inherited_macro_context = self.latest_campaign_decision.macro_context.to_dict()
+                    if self.latest_campaign_decision.sector_context:
+                        inherited_sector_context = self.latest_campaign_decision.sector_context.to_dict()
+                    logger.info(f"Tactical also inheriting from Campaign (overriding Strategic)")
+                
                 # Tactical decision maker uses current_date as decision time
                 decision = await self.tactical_dm.decide(
                     symbol=symbol,
-                    inherited_constraints=None,  # Could pass constraints from upper levels
-                    inherited_macro_context=None,
-                    inherited_sector_context=None,
+                    inherited_constraints=inherited_constraints,
+                    inherited_macro_context=inherited_macro_context,
+                    inherited_sector_context=inherited_sector_context,
                     current_time=current_date  # Pass backtest date as decision time
                 )
                 self.scheduler.state.last_tactical_time = current_date
@@ -438,7 +475,7 @@ def estimate_decision_frequency(
         Estimated decision counts by level
     """
     # Base frequencies
-    strategic = backtest_days // 90  # Quarterly
+    strategic = backtest_days // 30  # Monthly
     campaign = backtest_days // 7    # Weekly
     tactical = backtest_days           # Daily
     

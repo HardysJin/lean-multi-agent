@@ -70,7 +70,7 @@ class TestTimeframe:
         assert Timeframe.EXECUTION.seconds == 3600
         assert Timeframe.TACTICAL.seconds == 86400
         assert Timeframe.CAMPAIGN.seconds == 604800
-        assert Timeframe.STRATEGIC.seconds == 7776000
+        assert Timeframe.STRATEGIC.seconds == 2592000
 
 
 class TestDecisionRecord:

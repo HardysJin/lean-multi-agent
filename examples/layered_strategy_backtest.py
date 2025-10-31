@@ -121,7 +121,7 @@ class LayeredStrategyBacktest:
         decision_estimates = estimate_decision_frequency(total_days, enable_escalation=True)
         
         logger.info(f"\n🎯 Step 2: Decision frequency estimation (for {total_days} days):")
-        logger.info(f"  • Strategic decisions: ~{decision_estimates['strategic']} (quarterly)")
+        logger.info(f"  • Strategic decisions: ~{decision_estimates['strategic']} (monthly)")
         logger.info(f"  • Campaign decisions: ~{decision_estimates['campaign']} (weekly)")
         logger.info(f"  • Tactical decisions: ~{decision_estimates['tactical']} (daily)")
         logger.info(f"  • Total decisions: ~{decision_estimates['total']}")

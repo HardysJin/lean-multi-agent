@@ -272,7 +272,7 @@ result = await injector.inject_news(
 **核心理念**: 
 ```
 不是每天都用LLM，而是分层计算：
-- STRATEGIC (90天): 完整Multi-Agent → 设定战略方向
+- STRATEGIC (30天): 完整Multi-Agent → 设定战略方向
 - CAMPAIGN (7天): 混合模式 → 调整配置
 - TACTICAL (每天): 快速模式 → 遵守上层约束的规则引擎
 - 关键时刻: 自动切换到完整LLM模式
@@ -372,9 +372,9 @@ class SignalCache:
         │                 │                 │
 ┌───────▼───────┐  ┌──────▼──────┐  ┌──────▼──────┐
 │ STRATEGIC     │  │ CAMPAIGN    │  │ TACTICAL    │
-│ (90天决策)    │  │ (7天决策)   │  │ (每日决策)  │
+│ (30天决策)    │  │ (7天决策)   │  │ (每日决策)  │
 │               │  │             │  │             │
-│ • 每90天1次   │  │ • 每7天1次  │  │ • 每天1次   │
+│ • 每30天1次   │  │ • 每7天1次  │  │ • 每天1次   │
 │ • 用Full LLM  │  │ • 用Hybrid  │  │ • 用Fast/LLM│
 │ • 设定约束    │  │ • 执行配置  │  │ • 智能切换  │
 └───────────────┘  └─────────────┘  └─────────────┘
@@ -472,14 +472,14 @@ class LayeredDecisionScheduler:
     分层决策调度器
     
     决策频率：
-    - STRATEGIC: 90天一次 → Full Multi-Agent
+    - STRATEGIC: 30天一次 → Full Multi-Agent
     - CAMPAIGN: 7天一次 → Hybrid（技术+部分LLM）
     - TACTICAL: 每天 → Fast（规则）或Full（关键时刻）
     """
     
     def __init__(self, meta_agent, backtest_clock):
         self.decision_intervals = {
-            Timeframe.STRATEGIC: 90,
+            Timeframe.STRATEGIC: 30,
             Timeframe.CAMPAIGN: 7,
             Timeframe.TACTICAL: 1,
         }
@@ -493,7 +493,7 @@ class LayeredDecisionScheduler:
     async def get_signal(self, symbol, date):
         """获取交易信号（分层智能路由）"""
         
-        # 1. STRATEGIC层（90天更新）
+        # 1. STRATEGIC层（30天更新）
         if self.should_make_decision(Timeframe.STRATEGIC):
             strategic_constraints = await self._make_strategic_decision(symbol, date)
         else:

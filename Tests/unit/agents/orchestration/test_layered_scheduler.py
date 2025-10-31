@@ -117,7 +117,7 @@ def scheduler(mock_strategic_maker, mock_campaign_maker, mock_tactical_maker):
         strategic_maker=mock_strategic_maker,
         campaign_maker=mock_campaign_maker,
         tactical_maker=mock_tactical_maker,
-        strategic_interval_days=90,
+        strategic_interval_days=30,
         campaign_interval_days=7,
         tactical_interval_days=1
     )
@@ -131,7 +131,7 @@ def test_scheduler_initialization(scheduler):
     assert scheduler.campaign_maker is not None
     assert scheduler.tactical_maker is not None
     
-    assert scheduler.strategic_interval == timedelta(days=90)
+    assert scheduler.strategic_interval == timedelta(days=30)
     assert scheduler.campaign_interval == timedelta(days=7)
     assert scheduler.tactical_interval == timedelta(days=1)
     
@@ -152,12 +152,12 @@ def test_should_run_strategic_after_interval(scheduler):
     """测试间隔后运行战略层"""
     scheduler.state.last_strategic_time = datetime(2024, 1, 1)
     
-    # 90天后应该运行
-    current_time = datetime(2024, 3, 31)  # 1月1日 + 90天
+    # 30天后应该运行
+    current_time = datetime(2024, 1, 31)  # 1月1日 + 30天
     assert scheduler.should_run_strategic(current_time) is True
     
-    # 89天后不应该运行
-    current_time = datetime(2024, 3, 30)
+    # 29天后不应该运行
+    current_time = datetime(2024, 1, 30)
     assert scheduler.should_run_strategic(current_time) is False
 
 
@@ -284,12 +284,12 @@ async def test_decide_tactical_after_strategic(scheduler, mock_tactical_maker):
 @pytest.mark.asyncio
 async def test_decide_campaign_scheduled(scheduler, mock_campaign_maker):
     """测试定期运行战役层"""
-    # 战略层上次运行（不到90天）
+    # 战略层上次运行（不到30天）
     scheduler.state.last_strategic_time = datetime(2024, 1, 1)
     scheduler.state.last_campaign_time = datetime(2024, 1, 1)  # Campaign上次运行
     scheduler.state.active_constraints = {'allow_long': True, 'allow_short': False}
     
-    # 7天后运行战役层（但strategic还没到90天）
+    # 7天后运行战役层（但strategic还没到30天）
     current_time = datetime(2024, 1, 8)
     
     decision = await scheduler.decide(
@@ -363,7 +363,7 @@ def test_get_next_schedule(scheduler):
     current_time = datetime(2024, 1, 10)
     schedule = scheduler.get_next_schedule(current_time)
     
-    assert schedule['strategic'] == datetime(2024, 3, 31)  # 1月1日 + 90天
+    assert schedule['strategic'] == datetime(2024, 1, 31)  # 1月1日 + 30天
     assert schedule['campaign'] == datetime(2024, 1, 8)   # +7 days
     assert schedule['tactical'] == datetime(2024, 1, 2)   # +1 day
 
