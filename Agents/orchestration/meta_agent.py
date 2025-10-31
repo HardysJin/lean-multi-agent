@@ -661,7 +661,8 @@ Always consider:
         additional_context: Optional[Dict[str, Any]] = None,
         macro_context: Optional[Dict[str, Any]] = None,
         sector_context: Optional[Dict[str, Any]] = None,
-        constraints: Optional[Dict[str, Any]] = None
+        constraints: Optional[Dict[str, Any]] = None,
+        current_time: Optional[datetime] = None
     ) -> MetaDecision:
         """
         分析并做出交易决策
@@ -681,10 +682,14 @@ Always consider:
             macro_context: 宏观环境背景（来自MacroAgent）
             sector_context: 行业分析背景（来自SectorAgent）
             constraints: 约束条件（风险控制参数）
+            current_time: 当前时间（回测模式下使用模拟日期，实盘模式下为None则使用当前时间）
             
         Returns:
             MetaDecision对象
         """
+        # 使用提供的时间或当前时间
+        decision_time = current_time if current_time is not None else datetime.now()
+        
         # 0. 检查约束条件（优先级最高）
         if constraints:
             # 检查是否允许交易
@@ -697,7 +702,7 @@ Always consider:
                     reasoning='Market constraints prohibit all trading (熊市禁止做多)',
                     evidence={'constraints': constraints},
                     tool_calls=[],
-                    timestamp=datetime.now()
+                    timestamp=decision_time
                 )
         
         # 1. 检索记忆上下文
@@ -741,7 +746,8 @@ REASONING: [detailed explanation]"""
         decision = self._parse_decision(
             symbol=symbol,
             response=final_response,
-            tool_calls=tool_calls
+            tool_calls=tool_calls,
+            decision_time=decision_time
         )
         
         # 5. 存储到记忆系统
@@ -761,7 +767,8 @@ REASONING: [detailed explanation]"""
         self,
         symbol: str,
         response: str,
-        tool_calls: List[ToolCall]
+        tool_calls: List[ToolCall],
+        decision_time: datetime
     ) -> MetaDecision:
         """
         从LLM响应中解析决策
@@ -770,6 +777,7 @@ REASONING: [detailed explanation]"""
             symbol: 交易标的
             response: LLM响应文本
             tool_calls: 执行的工具调用
+            decision_time: 决策时间
             
         Returns:
             MetaDecision对象
@@ -832,7 +840,7 @@ REASONING: [detailed explanation]"""
             reasoning=reasoning,
             evidence=evidence,
             tool_calls=tool_calls,
-            timestamp=datetime.now()
+            timestamp=decision_time
         )
     
     def get_agent_info(self, agent_name: str) -> Optional[Dict[str, Any]]:

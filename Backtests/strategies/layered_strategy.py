@@ -209,12 +209,13 @@ class LayeredStrategy:
                 )
                 self.scheduler.state.last_campaign_time = current_date
             else:  # tactical
-                # Tactical decision maker doesn't use visible_data_end
+                # Tactical decision maker uses current_date as decision time
                 decision = await self.tactical_dm.decide(
                     symbol=symbol,
                     inherited_constraints=None,  # Could pass constraints from upper levels
                     inherited_macro_context=None,
-                    inherited_sector_context=None
+                    inherited_sector_context=None,
+                    current_time=current_date  # Pass backtest date as decision time
                 )
                 self.scheduler.state.last_tactical_time = current_date
         except Exception as e:

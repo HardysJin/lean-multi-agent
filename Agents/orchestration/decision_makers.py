@@ -99,11 +99,14 @@ class StrategicDecisionMaker:
         
         Args:
             symbol: 股票代码
-            visible_data_end: 回测模式的时间截止点
+            visible_data_end: 回测模式的时间截止点（也是决策时间）
             
         Returns:
             Decision对象
         """
+        # 使用visible_data_end作为决策时间（回测模式）或当前时间（实盘模式）
+        decision_time = visible_data_end if visible_data_end is not None else datetime.now()
+        
         # 1. 宏观分析
         macro_context = await self.macro_agent.analyze_macro_environment(
             visible_data_end=visible_data_end
@@ -123,7 +126,8 @@ class StrategicDecisionMaker:
             symbol=symbol,
             macro_context=macro_context.to_dict(),
             sector_context=sector_context.to_dict(),
-            constraints=macro_context.constraints
+            constraints=macro_context.constraints,
+            current_time=decision_time
         )
         
         # 5. 构建Decision
@@ -135,7 +139,7 @@ class StrategicDecisionMaker:
             macro_context=macro_context,
             sector_context=sector_context,
             constraints=macro_context.constraints,
-            timestamp=datetime.now(),
+            timestamp=decision_time,
             decision_level='strategic'
         )
         
@@ -178,12 +182,15 @@ class CampaignDecisionMaker:
         
         Args:
             symbol: 股票代码
-            visible_data_end: 回测模式的时间截止点
+            visible_data_end: 回测模式的时间截止点（也是决策时间）
             inherited_constraints: 从Strategic层继承的约束
             
         Returns:
             Decision对象
         """
+        # 使用visible_data_end作为决策时间（回测模式）或当前时间（实盘模式）
+        decision_time = visible_data_end if visible_data_end is not None else datetime.now()
+        
         # 1. 宏观分析（可能从cache获取）
         macro_context = await self.macro_agent.analyze_macro_environment(
             visible_data_end=visible_data_end
@@ -205,7 +212,8 @@ class CampaignDecisionMaker:
             symbol=symbol,
             macro_context=macro_context.to_dict(),
             sector_context=sector_context.to_dict(),
-            constraints=constraints
+            constraints=constraints,
+            current_time=decision_time
         )
         
         # 5. 构建Decision
@@ -217,7 +225,7 @@ class CampaignDecisionMaker:
             macro_context=macro_context,
             sector_context=sector_context,
             constraints=constraints,
-            timestamp=datetime.now(),
+            timestamp=decision_time,
             decision_level='campaign'
         )
         
@@ -250,7 +258,8 @@ class TacticalDecisionMaker:
         symbol: str,
         inherited_constraints: Optional[Dict[str, Any]] = None,
         inherited_macro_context: Optional[Dict[str, Any]] = None,
-        inherited_sector_context: Optional[Dict[str, Any]] = None
+        inherited_sector_context: Optional[Dict[str, Any]] = None,
+        current_time: Optional[datetime] = None
     ) -> Decision:
         """
         制定战术决策
@@ -260,16 +269,21 @@ class TacticalDecisionMaker:
             inherited_constraints: 从上层继承的约束
             inherited_macro_context: 从上层继承的宏观背景
             inherited_sector_context: 从上层继承的行业背景
+            current_time: 当前时间（回测模式下使用模拟日期，实盘模式下为None则使用当前时间）
             
         Returns:
             Decision对象
         """
+        # 使用提供的时间或当前时间
+        decision_time = current_time if current_time is not None else datetime.now()
+        
         # 快速决策：直接使用继承的上下文
         meta_decision = await self.meta_agent.analyze_and_decide(
             symbol=symbol,
             macro_context=inherited_macro_context,
             sector_context=inherited_sector_context,
-            constraints=inherited_constraints
+            constraints=inherited_constraints,
+            current_time=decision_time
         )
         
         # 构建Decision
@@ -281,7 +295,7 @@ class TacticalDecisionMaker:
             macro_context=None,  # 不重新分析宏观
             sector_context=None,  # 不重新分析行业
             constraints=inherited_constraints,
-            timestamp=datetime.now(),
+            timestamp=decision_time,
             decision_level='tactical'
         )
         
