@@ -342,7 +342,11 @@ Please respond in JSON format with the following structure:
         ]
         
         try:
-            response = await self.llm.ainvoke(messages)
+            # 使用统一的日志方法
+            response = await self._call_llm_with_logging(
+                messages,
+                operation="macro_analysis"
+            )
             content = response.content
             
             # 提取JSON

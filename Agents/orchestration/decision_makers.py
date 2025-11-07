@@ -20,10 +20,15 @@ Decision Makers - 决策制定者层
 from typing import Optional, Dict, Any
 from datetime import datetime
 from dataclasses import dataclass
+import pandas as pd
+import logging
 
-from Agents.core import MacroAgent, MacroContext
-from Agents.core import SectorAgent, SectorContext
-from Agents.orchestration.meta_agent import MetaAgent, MetaDecision
+from Agents.core import MacroAgent, SectorAgent
+from Agents.orchestration.meta_agent import MetaAgent
+from Agents.core.macro_agent import MacroContext
+from Agents.core.sector_agent import SectorContext
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -112,6 +117,8 @@ class StrategicDecisionMaker:
             visible_data_end=visible_data_end
         )
         
+        logger.info(f"🔍 StrategicDM: Got macro_context, calling MetaAgent next...")
+        
         # 2. 确定股票所属行业
         sector = self.sector_agent.get_sector_for_symbol(symbol)
         
@@ -129,6 +136,9 @@ class StrategicDecisionMaker:
             constraints=macro_context.constraints,
             current_time=decision_time
         )
+        
+        # DEBUG: Log meta decision
+        logger.info(f"🔍 Strategic MetaDecision: action={meta_decision.action}, conviction={meta_decision.conviction}, reasoning_preview={meta_decision.reasoning[:80]}...")
         
         # 5. 构建Decision
         decision = Decision(
@@ -256,6 +266,8 @@ class TacticalDecisionMaker:
     async def decide(
         self,
         symbol: str,
+        price_data: Optional[pd.DataFrame] = None,
+        portfolio_state: Optional[Dict[str, Any]] = None,
         inherited_constraints: Optional[Dict[str, Any]] = None,
         inherited_macro_context: Optional[Dict[str, Any]] = None,
         inherited_sector_context: Optional[Dict[str, Any]] = None,
@@ -266,6 +278,8 @@ class TacticalDecisionMaker:
         
         Args:
             symbol: 股票代码
+            price_data: 历史价格数据（OHLCV），用于技术分析
+            portfolio_state: 当前投资组合状态（持仓、现金、PnL等）
             inherited_constraints: 从上层继承的约束
             inherited_macro_context: 从上层继承的宏观背景
             inherited_sector_context: 从上层继承的行业背景
@@ -277,9 +291,47 @@ class TacticalDecisionMaker:
         # 使用提供的时间或当前时间
         decision_time = current_time if current_time is not None else datetime.now()
         
-        # 快速决策：直接使用继承的上下文
+        # 从price_data中提取当前市场数据
+        additional_context = {}
+        if price_data is not None and len(price_data) > 0:
+            try:
+                current_price = float(price_data['Close'].iloc[-1])
+                additional_context['current_price'] = current_price
+                additional_context['volume'] = float(price_data['Volume'].iloc[-1])
+                
+                # 计算1日变化
+                if len(price_data) >= 2:
+                    prev_close = float(price_data['Close'].iloc[-2])
+                    price_change_1d = ((current_price - prev_close) / prev_close) * 100
+                    additional_context['price_change_1d'] = price_change_1d
+                
+                # 计算5日变化（如果有足够数据）
+                if len(price_data) >= 6:
+                    prev_close_5d = float(price_data['Close'].iloc[-6])
+                    price_change_5d = ((current_price - prev_close_5d) / prev_close_5d) * 100
+                    additional_context['price_change_5d'] = price_change_5d
+                
+                # 添加最近的高低点
+                if len(price_data) >= 20:
+                    recent_high = float(price_data['High'].iloc[-20:].max())
+                    recent_low = float(price_data['Low'].iloc[-20:].min())
+                    additional_context['recent_high_20d'] = recent_high
+                    additional_context['recent_low_20d'] = recent_low
+                    additional_context['distance_from_high'] = ((current_price - recent_high) / recent_high) * 100
+                    additional_context['distance_from_low'] = ((current_price - recent_low) / recent_low) * 100
+            except Exception as e:
+                # 如果提取数据失败，继续但记录警告
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to extract price data: {e}")
+        
+        # 添加投资组合状态到上下文
+        if portfolio_state:
+            additional_context['portfolio'] = portfolio_state
+        
+        # 快速决策：直接使用继承的上下文，加上价格信息和持仓信息
         meta_decision = await self.meta_agent.analyze_and_decide(
             symbol=symbol,
+            additional_context=additional_context,
             macro_context=inherited_macro_context,
             sector_context=inherited_sector_context,
             constraints=inherited_constraints,

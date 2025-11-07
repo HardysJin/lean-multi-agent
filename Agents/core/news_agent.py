@@ -447,7 +447,11 @@ Consider:
         ]
         
         try:
-            response = await self.llm.ainvoke(messages)
+            # 使用BaseAgent的统一LLM调用方法（自动记录日志）
+            response = await self._call_llm_with_logging(
+                messages=messages,
+                operation=f"news_sentiment_{article.source}"
+            )
             result = self._parse_sentiment_response(response.content)
             return result
         except Exception as e:
@@ -522,7 +526,11 @@ Provide a concise summary (2-3 sentences) covering:
         ]
         
         try:
-            response = await self.llm.ainvoke(messages)
+            # 使用BaseAgent的统一LLM调用方法（自动记录日志）
+            response = await self._call_llm_with_logging(
+                messages=messages,
+                operation=f"news_summary_{symbol}"
+            )
             return response.content
         except Exception as e:
             self.logger.error(f"Failed to generate summary: {e}")

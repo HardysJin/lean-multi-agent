@@ -11,6 +11,9 @@ Meta Agent作为协调器（Orchestrator），不是专家（Specialist）：
 
 import json
 import asyncio
+import logging
+import os
+import time
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 from dataclasses import dataclass, asdict
@@ -21,6 +24,9 @@ from Agents.utils.llm_config import get_default_llm, LLMConfig
 from Agents.utils.tool_registry import ToolRegistry
 from Memory.state_manager import MultiTimeframeStateManager
 from Memory.schemas import DecisionRecord, Timeframe
+
+# 获取logger
+logger = logging.getLogger("Agent.meta-agent")
 
 
 @dataclass
@@ -122,6 +128,246 @@ class MetaAgent:
         
         # 决策历史
         self.decision_history: List[MetaDecision] = []
+    
+    def _extract_prompt_from_messages(self, messages: List[Any]) -> str:
+        """
+        从LangChain消息列表中提取prompt文本（用于日志）
+        
+        Args:
+            messages: LangChain消息列表
+            
+        Returns:
+            格式化的prompt字符串
+        """
+        parts = []
+        for msg in messages:
+            if hasattr(msg, 'type') and hasattr(msg, 'content'):
+                parts.append(f"[{msg.type}]: {msg.content}")
+            else:
+                parts.append(str(msg))
+        return "\n".join(parts)
+    
+    def _extract_response_text(self, response: Any) -> str:
+        """
+        从LLM响应对象中提取文本
+        
+        Args:
+            response: LLM响应对象
+            
+        Returns:
+            响应文本
+        """
+        if hasattr(response, 'content'):
+            return str(response.content)
+        return str(response)
+    
+    async def _gather_technical_analysis(
+        self,
+        symbol: str,
+        additional_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        主动收集技术分析数据（In-Process模式）
+        
+        调用TechnicalAgent的所有相关工具获取技术指标
+        
+        Args:
+            symbol: 股票代码
+            additional_context: 额外上下文（可能包含price_data）
+            
+        Returns:
+            技术分析结果字典
+        """
+        technical_data = {}
+        
+        # 检查是否有TechnicalAgent连接
+        if 'technical' not in self.agents:
+            logger.warning("TechnicalAgent not connected, skipping technical analysis")
+            return {"error": "TechnicalAgent not available"}
+        
+        try:
+            # 1. 计算技术指标（RSI, MACD, etc.）
+            try:
+                indicators = await self.execute_tool(
+                    agent_name='technical',
+                    tool_name='calculate_indicators',
+                    arguments={'symbol': symbol, 'period': '3mo'}
+                )
+                technical_data['indicators'] = indicators
+            except Exception as e:
+                logger.debug(f"Indicators calculation failed: {e}")
+                technical_data['indicators'] = None
+            
+            # 2. 识别支撑/阻力位
+            try:
+                support_resistance = await self.execute_tool(
+                    agent_name='technical',
+                    tool_name='find_support_resistance',
+                    arguments={'symbol': symbol}
+                )
+                technical_data['support_resistance'] = support_resistance
+            except Exception as e:
+                logger.debug(f"Support/Resistance identification failed: {e}")
+                technical_data['support_resistance'] = None
+            
+            # 3. 检测图表形态
+            try:
+                patterns = await self.execute_tool(
+                    agent_name='technical',
+                    tool_name='detect_patterns',
+                    arguments={'symbol': symbol, 'lookback_days': 60}
+                )
+                technical_data['patterns'] = patterns
+            except Exception as e:
+                logger.debug(f"Pattern detection failed: {e}")
+                technical_data['patterns'] = None
+            
+            # 4. 生成交易信号
+            try:
+                signals = await self.execute_tool(
+                    agent_name='technical',
+                    tool_name='generate_signals',
+                    arguments={'symbol': symbol}
+                )
+                technical_data['signals'] = signals
+            except Exception as e:
+                logger.debug(f"Signal generation failed: {e}")
+                technical_data['signals'] = None
+            
+            logger.info(f"Technical analysis gathered for {symbol}: {len([v for v in technical_data.values() if v])} indicators available")
+            
+        except Exception as e:
+            logger.error(f"Error gathering technical analysis for {symbol}: {e}")
+            technical_data['error'] = str(e)
+        
+        return technical_data
+    
+    async def _gather_news_sentiment(
+        self,
+        symbol: str
+    ) -> Dict[str, Any]:
+        """
+        主动收集新闻情绪数据（In-Process模式）
+        
+        调用NewsAgent获取新闻和情绪分析
+        
+        Args:
+            symbol: 股票代码
+            
+        Returns:
+            新闻情绪结果字典
+        """
+        news_data = {}
+        
+        # 检查是否有NewsAgent连接
+        if 'news' not in self.agents:
+            logger.warning("NewsAgent not connected, skipping news sentiment")
+            return {"error": "NewsAgent not available"}
+        
+        try:
+            # 1. 获取最新新闻
+            try:
+                news_articles = await self.execute_tool(
+                    agent_name='news',
+                    tool_name='fetch_news',
+                    arguments={'symbol': symbol, 'limit': 10, 'days_back': 7}
+                )
+                news_data['articles'] = news_articles
+                
+                # 2. 分析新闻情绪
+                if news_articles and isinstance(news_articles, list) and len(news_articles) > 0:
+                    try:
+                        sentiment_result = await self.execute_tool(
+                            agent_name='news',
+                            tool_name='analyze_sentiment',
+                            arguments={'articles': news_articles}
+                        )
+                        news_data['sentiment_analysis'] = sentiment_result
+                    except Exception as e:
+                        logger.debug(f"Sentiment analysis failed: {e}")
+                        news_data['sentiment_analysis'] = None
+            except Exception as e:
+                logger.debug(f"News fetching failed: {e}")
+                news_data['articles'] = None
+                news_data['sentiment_analysis'] = None
+            
+            # 3. 生成情绪报告
+            try:
+                sentiment_report = await self.execute_tool(
+                    agent_name='news',
+                    tool_name='generate_sentiment_report',
+                    arguments={'symbol': symbol, 'days_back': 7}
+                )
+                news_data['sentiment_report'] = sentiment_report
+            except Exception as e:
+                logger.debug(f"Sentiment report generation failed: {e}")
+                news_data['sentiment_report'] = None
+            
+            logger.info(f"News sentiment gathered for {symbol}: {len([v for v in news_data.values() if v])} data points available")
+            
+        except Exception as e:
+            logger.error(f"Error gathering news sentiment for {symbol}: {e}")
+            news_data['error'] = str(e)
+        
+        return news_data
+    
+    async def _call_llm_direct(
+        self,
+        messages: List[Dict[str, Any]]
+    ) -> str:
+        """
+        直接调用LLM（不使用tool calling）
+        
+        Args:
+            messages: 对话消息列表
+            
+        Returns:
+            LLM响应文本
+        """
+        if not self.llm_client:
+            return "No LLM client available. Please configure LLM."
+        
+        # 构建LangChain消息
+        langchain_messages = [SystemMessage(content=self._build_system_prompt())]
+        for msg in messages:
+            if msg["role"] == "user":
+                langchain_messages.append(HumanMessage(content=msg["content"]))
+        
+        try:
+            # 日志: LLM调用开始
+            logger.debug("[meta_agent_direct] LLM Call Starting")
+            
+            # 日志: Prompt预览
+            prompt_text = self._extract_prompt_from_messages(langchain_messages)
+            prompt_preview = prompt_text[:200] + "..." if len(prompt_text) > 200 else prompt_text
+            logger.debug(f"[meta_agent_direct] Prompt Preview: {prompt_preview}")
+            
+            # 可选：完整prompt
+            if os.getenv('LOG_FULL_PROMPTS', '').lower() == 'true':
+                logger.debug(f"[meta_agent_direct] Full Prompt:\n{prompt_text}")
+            
+            # 调用LLM
+            start_time = time.time()
+            response = self.llm_client.invoke(langchain_messages)
+            elapsed_ms = (time.time() - start_time) * 1000
+            
+            # 提取响应文本
+            response_text = self._extract_response_text(response)
+            
+            # 日志: 响应摘要
+            response_preview = response_text[:200] + "..." if len(response_text) > 200 else response_text
+            logger.info(f"[meta_agent_direct] LLM Response received in {elapsed_ms:.0f}ms (~{len(response_text)} chars)")
+            logger.debug(f"[meta_agent_direct] Response Preview: {response_preview}")
+            
+            # 可选：完整响应
+            if os.getenv('LOG_FULL_RESPONSES', '').lower() == 'true':
+                logger.debug(f"[meta_agent_direct] Full Response:\n{response_text}")
+            
+            return response_text
+            
+        except Exception as e:
+            logger.error(f"[meta_agent_direct] LLM call failed: {e}")
+            return f"LLM call failed: {str(e)}"
     
     async def connect_to_agent(
         self,
@@ -373,29 +619,39 @@ Connected Agents:
 
 Your role:
 1. Analyze the current situation including macro and sector context
-2. Respect all constraints provided (especially allow_long/allow_short)
-3. Decide which specialist agents to consult
-4. Call appropriate tools to gather information
-5. Synthesize all inputs into a final trading decision
-6. Provide clear reasoning for your decision
+2. Consider current portfolio positions and available capital
+3. Respect all constraints provided (especially allow_long/allow_short)
+4. Decide which specialist agents to consult
+5. Call appropriate tools to gather information
+6. Synthesize all inputs into a final trading decision
+7. Provide clear reasoning for your decision
 
 Context Priority:
 1. **Constraints** (MUST follow): Risk limits, trading restrictions from macro environment
-2. **Macro Context**: Market regime, interest rates, overall risk level
-3. **Sector Context**: Industry trends, rotation signals, relative strength
-4. **Memory**: Historical decisions and patterns
-5. **Technical/News**: Individual stock analysis
+2. **Portfolio State**: Current holdings, available cash, position sizes
+3. **Macro Context**: Market regime, interest rates, overall risk level
+4. **Sector Context**: Industry trends, rotation signals, relative strength
+5. **Memory**: Historical decisions and patterns
+6. **Technical/News**: Individual stock analysis
+
+Portfolio Considerations:
+- Check if already holding the symbol (avoid redundant buys)
+- Consider position concentration (max_position_size constraint)
+- Ensure sufficient cash for new positions
+- Evaluate if position adjustment (scaling in/out) is needed
+- Consider realized/unrealized PnL when making decisions
 
 Constraint Enforcement:
 - If allow_long=False: DO NOT recommend BUY
 - If allow_short=False: DO NOT recommend short positions
 - If max_position_size specified: Consider position sizing
 - If max_risk_per_trade specified: Adjust conviction accordingly
+- If insufficient cash: DO NOT recommend BUY
 
 Trading Actions:
-- BUY: Strong evidence to enter long position (only if constraints allow)
+- BUY: Strong evidence to enter long position (only if constraints allow AND sufficient cash)
 - SELL: Strong evidence to exit or enter short position  
-- HOLD: Insufficient evidence, conflicting signals, or constraints prohibit action
+- HOLD: Insufficient evidence, conflicting signals, constraints prohibit action, or already at target position
 
 Conviction Score (1-10):
 - 1-3: Low conviction, weak signals
@@ -406,6 +662,8 @@ Conviction Score (1-10):
 Always consider:
 - Multiple timeframes and perspectives
 - Risk management principles (from constraints)
+- Current portfolio exposure and diversification
+- Available capital and position sizing
 - Macro environment alignment
 - Sector trends and rotation
 - Historical context from memory
@@ -465,9 +723,38 @@ Always consider:
                     langchain_messages.append(HumanMessage(content=msg["content"]))
             
             try:
+                # 日志: LLM调用开始
+                logger.debug("[meta_agent_no_tools] LLM Call Starting")
+                
+                # 日志: Prompt预览
+                prompt_text = self._extract_prompt_from_messages(langchain_messages)
+                prompt_preview = prompt_text[:200] + "..." if len(prompt_text) > 200 else prompt_text
+                logger.debug(f"[meta_agent_no_tools] Prompt Preview: {prompt_preview}")
+                
+                # 可选：完整prompt（需要环境变量）
+                if os.getenv('LOG_FULL_PROMPTS', '').lower() == 'true':
+                    logger.debug(f"[meta_agent_no_tools] Full Prompt:\n{prompt_text}")
+                
+                # 调用LLM
+                start_time = time.time()
                 response = self.llm_client.invoke(langchain_messages)
+                elapsed_ms = (time.time() - start_time) * 1000
+                
+                # 提取响应文本
+                response_text = self._extract_response_text(response)
+                
+                # 日志: 响应摘要
+                response_preview = response_text[:200] + "..." if len(response_text) > 200 else response_text
+                logger.info(f"[meta_agent_no_tools] LLM Response received in {elapsed_ms:.0f}ms (~{len(response_text)} chars)")
+                logger.debug(f"[meta_agent_no_tools] Response Preview: {response_preview}")
+                
+                # 可选：完整响应
+                if os.getenv('LOG_FULL_RESPONSES', '').lower() == 'true':
+                    logger.debug(f"[meta_agent_no_tools] Full Response:\n{response_text}")
+                
                 return response.content, []
             except Exception as e:
+                logger.error(f"[meta_agent_no_tools] LLM call failed: {e}")
                 return f"LLM call failed: {str(e)}", []
         
         # 绑定工具到LLM
@@ -481,9 +768,38 @@ Always consider:
                     langchain_messages.append(HumanMessage(content=msg["content"]))
             
             try:
+                # 日志: LLM调用开始
+                logger.debug("[meta_agent_fallback] LLM Call Starting (no bind_tools support)")
+                
+                # 日志: Prompt预览
+                prompt_text = self._extract_prompt_from_messages(langchain_messages)
+                prompt_preview = prompt_text[:200] + "..." if len(prompt_text) > 200 else prompt_text
+                logger.debug(f"[meta_agent_fallback] Prompt Preview: {prompt_preview}")
+                
+                # 可选：完整prompt
+                if os.getenv('LOG_FULL_PROMPTS', '').lower() == 'true':
+                    logger.debug(f"[meta_agent_fallback] Full Prompt:\n{prompt_text}")
+                
+                # 调用LLM
+                start_time = time.time()
                 response = self.llm_client.invoke(langchain_messages)
+                elapsed_ms = (time.time() - start_time) * 1000
+                
+                # 提取响应文本
+                response_text = self._extract_response_text(response)
+                
+                # 日志: 响应摘要
+                response_preview = response_text[:200] + "..." if len(response_text) > 200 else response_text
+                logger.info(f"[meta_agent_fallback] LLM Response received in {elapsed_ms:.0f}ms (~{len(response_text)} chars)")
+                logger.debug(f"[meta_agent_fallback] Response Preview: {response_preview}")
+                
+                # 可选：完整响应
+                if os.getenv('LOG_FULL_RESPONSES', '').lower() == 'true':
+                    logger.debug(f"[meta_agent_fallback] Full Response:\n{response_text}")
+                
                 return response.content, []
             except Exception as e:
+                logger.error(f"[meta_agent_fallback] LLM call failed: {e}")
                 return f"LLM call failed: {str(e)}", []
         
         # 构建初始消息
@@ -495,13 +811,48 @@ Always consider:
         # 迭代调用，支持多轮工具调用
         for iteration in range(max_iterations):
             try:
+                # 日志: LLM调用开始
+                logger.debug(f"[meta_agent_iter_{iteration}] LLM Call Starting")
+                
+                # 日志: Prompt预览（只在第一轮或DEBUG级别时）
+                if iteration == 0 or os.getenv('LOG_FULL_PROMPTS', '').lower() == 'true':
+                    prompt_text = self._extract_prompt_from_messages(langchain_messages)
+                    prompt_preview = prompt_text[:200] + "..." if len(prompt_text) > 200 else prompt_text
+                    logger.debug(f"[meta_agent_iter_{iteration}] Prompt Preview: {prompt_preview}")
+                    
+                    # 可选：完整prompt
+                    if os.getenv('LOG_FULL_PROMPTS', '').lower() == 'true':
+                        logger.debug(f"[meta_agent_iter_{iteration}] Full Prompt:\n{prompt_text}")
+                
                 # 调用LLM
+                start_time = time.time()
                 response = llm_with_tools.invoke(langchain_messages)
+                elapsed_ms = (time.time() - start_time) * 1000
+                
+                # 提取响应文本
+                response_text = self._extract_response_text(response)
                 
                 # 检查是否有工具调用
-                if not hasattr(response, 'tool_calls') or not response.tool_calls:
+                has_tool_calls = hasattr(response, 'tool_calls') and response.tool_calls
+                tool_count = len(response.tool_calls) if has_tool_calls else 0
+                
+                # 日志: 响应摘要
+                logger.info(f"[meta_agent_iter_{iteration}] LLM Response received in {elapsed_ms:.0f}ms (~{len(response_text)} chars, {tool_count} tool calls)")
+                
+                if not has_tool_calls:
                     # 没有工具调用，返回最终响应
+                    response_preview = response_text[:200] + "..." if len(response_text) > 200 else response_text
+                    logger.debug(f"[meta_agent_iter_{iteration}] Final Response Preview: {response_preview}")
+                    
+                    # 可选：完整响应
+                    if os.getenv('LOG_FULL_RESPONSES', '').lower() == 'true':
+                        logger.debug(f"[meta_agent_iter_{iteration}] Full Response:\n{response_text}")
+                    
                     return response.content, tool_calls_made
+                
+                # 有工具调用，记录工具名称
+                tool_names = [tc['name'] for tc in response.tool_calls]
+                logger.debug(f"[meta_agent_iter_{iteration}] Tool calls requested: {', '.join(tool_names)}")
                 
                 # 添加AI响应到消息历史
                 langchain_messages.append(response)
@@ -667,18 +1018,18 @@ Always consider:
         """
         分析并做出交易决策
         
-        这是Meta Agent的核心方法：
+        这是Meta Agent的核心方法（In-Process模式）：
         1. 从Memory System检索上下文
         2. 接收宏观和行业背景
-        3. 应用约束条件
-        4. 使用LLM分析situation
-        5. LLM决定调用哪些specialist工具
-        6. 综合所有信息形成最终决策
+        3. 主动调用TechnicalAgent和NewsAgent收集数据
+        4. 将所有信息整合到prompt中
+        5. LLM基于完整信息做决策
+        6. 应用约束条件
         
         Args:
             symbol: 交易标的
             query: 可选的具体问题（如"Should I buy AAPL?"）
-            additional_context: 额外的上下文信息
+            additional_context: 额外的上下文信息（包含price_data等）
             macro_context: 宏观环境背景（来自MacroAgent）
             sector_context: 行业分析背景（来自SectorAgent）
             constraints: 约束条件（风险控制参数）
@@ -708,57 +1059,77 @@ Always consider:
         # 1. 检索记忆上下文
         memory_context = self._retrieve_memory_context(symbol)
         
-        # 2. 构建初始消息（包含宏观和行业背景）
+        # 2. 主动收集技术分析和新闻数据（In-Process模式）
+        technical_analysis = await self._gather_technical_analysis(symbol, additional_context)
+        news_sentiment = await self._gather_news_sentiment(symbol)
+        
+        # 3. 构建完整的决策上下文
         context_str = json.dumps({
             "symbol": symbol,
             "memory": memory_context,
-            "additional": additional_context or {},
+            "market_data": additional_context or {},
+            "technical_analysis": technical_analysis,
+            "news_sentiment": news_sentiment,
             "macro": macro_context or {},
             "sector": sector_context or {},
             "constraints": constraints or {}
         }, indent=2, default=str)
         
+        # 4. 构建增强的prompt
         user_message = f"""Analyze the trading opportunity for {symbol}.
 
-Context:
+You have access to comprehensive market intelligence:
+
 {context_str}
 
 {'Question: ' + query if query else ''}
 
-Please:
-1. Use available tools to gather current market data and analysis
-2. Consider historical context from memory
-3. Synthesize all information
-4. Provide a clear trading decision (BUY/SELL/HOLD) with conviction (1-10)
-5. Explain your reasoning
+Based on the above information, please:
+1. Analyze the technical indicators (RSI, MACD, moving averages, support/resistance)
+2. Consider the news sentiment and market momentum
+3. Evaluate the macro environment and sector trends
+4. Apply risk constraints
+5. Synthesize all signals into a coherent trading decision
 
-Format your final decision as:
+Provide a clear trading decision with the following format:
 ACTION: [BUY/SELL/HOLD]
 CONVICTION: [1-10]
-REASONING: [detailed explanation]"""
+REASONING: [detailed explanation citing specific technical indicators, news sentiment, and macro factors]"""
         
         messages = [{"role": "user", "content": user_message}]
         
-        # 3. 调用LLM（可能包含多轮工具调用）
-        final_response, tool_calls = await self._call_llm_with_tools(messages)
+        # 5. 调用LLM获取决策（直接调用，不需要tool calling）
+        final_response = await self._call_llm_direct(messages)
         
-        # 4. 解析决策
+        # DEBUG: Log the response
+        logger.info(f"🔍 LLM Response for {symbol}: {final_response[:200]}...")
+        
+        # 6. 解析决策
         decision = self._parse_decision(
             symbol=symbol,
             response=final_response,
-            tool_calls=tool_calls,
+            tool_calls=[],  # In-process模式下，工具已经主动调用
             decision_time=decision_time
         )
         
-        # 5. 存储到记忆系统
+        # DEBUG: Log parsed decision
+        logger.info(f"🔍 Parsed Decision: action={decision.action}, conviction={decision.conviction}")
+        
+        # 7. 添加证据
+        decision.evidence.update({
+            'technical_analysis': technical_analysis,
+            'news_sentiment': news_sentiment
+        })
+        
+        # 8. 存储到记忆系统
         if self.state_manager:
             try:
                 decision_record = decision.to_decision_record()
                 self.state_manager.store_decision(decision_record)
             except Exception as e:
-                print(f"Warning: Failed to store decision in memory: {e}")
+                logger.warning(f"Failed to store decision in memory: {e}")
         
-        # 6. 记录到历史
+        # 9. 记录到历史
         self.decision_history.append(decision)
         
         return decision

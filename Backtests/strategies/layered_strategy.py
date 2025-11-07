@@ -103,7 +103,22 @@ class LayeredStrategy:
         # Initialize core agents with LLM client
         macro_agent = MacroAgent(llm_client=llm_client)
         sector_agent = SectorAgent(llm_client=llm_client)
-        meta_agent = MetaAgent(llm_client=llm_client)
+        technical_agent = TechnicalAnalysisAgent()
+        news_agent = NewsAgent(llm_client=llm_client)
+        
+        # Initialize meta agent
+        meta_agent = MetaAgent(llm_client=llm_client, state_manager=self.state_manager)
+        
+        # Store agents for later use
+        self.meta_agent = meta_agent
+        self.technical_agent = technical_agent
+        self.news_agent = news_agent
+        self.macro_agent = macro_agent
+        self.sector_agent = sector_agent
+        
+        # Note: Agent connection will be done lazily on first use
+        # to avoid event loop issues during __init__
+        self._agents_connected = False
         
         # Initialize decision makers using factory
         factory = DecisionMakerFactory(
@@ -166,6 +181,11 @@ class LayeredStrategy:
             - reason: Explanation of the decision
             - metadata: Additional decision context
         """
+        # Lazy connect agents on first use
+        if not self._agents_connected:
+            await self._connect_agents(self.meta_agent, self.technical_agent, self.news_agent)
+            self._agents_connected = True
+        
         context = context or {}
         current_date = pd.Timestamp(date)
         
@@ -174,16 +194,11 @@ class LayeredStrategy:
         should_campaign = self.scheduler.should_run_campaign(current_date)
         should_tactical = self.scheduler.should_run_tactical(current_date)
         
-        # Determine highest priority decision level to execute
-        decision_level = None
-        if should_strategic:
-            decision_level = "strategic"
-        elif should_campaign:
-            decision_level = "campaign"
-        elif should_tactical:
-            decision_level = "tactical"
+        # Execute decisions in order: Strategic -> Campaign -> Tactical
+        # Higher levels set context for lower levels
         
-        if decision_level is None:
+        # No decision at all? (shouldn't happen with daily tactical)
+        if not (should_strategic or should_campaign or should_tactical):
             # No decision needed, return HOLD
             return self._create_hold_signal(
                 symbol=symbol,
@@ -191,6 +206,16 @@ class LayeredStrategy:
                 reason="No decision needed at this time (within cooldown period)",
                 metadata={"scheduler_state": "cooldown"}
             )
+        
+        # Determine which level to execute
+        # Note: We only execute ONE decision per day, but choose the highest priority one
+        decision_level = None
+        if should_strategic:
+            decision_level = "strategic"
+        elif should_campaign:
+            decision_level = "campaign"
+        elif should_tactical:
+            decision_level = "tactical"
         
         # Execute decision at appropriate level
         logger.info(f"Making {decision_level} decision for {symbol} on {date}")
@@ -246,9 +271,14 @@ class LayeredStrategy:
                         inherited_sector_context = self.latest_campaign_decision.sector_context.to_dict()
                     logger.info(f"Tactical also inheriting from Campaign (overriding Strategic)")
                 
+                # Build portfolio state from context (if available)
+                portfolio_state = self._build_portfolio_state(symbol, context)
+                
                 # Tactical decision maker uses current_date as decision time
                 decision = await self.tactical_dm.decide(
                     symbol=symbol,
+                    price_data=price_data,
+                    portfolio_state=portfolio_state,
                     inherited_constraints=inherited_constraints,
                     inherited_macro_context=inherited_macro_context,
                     inherited_sector_context=inherited_sector_context,
@@ -342,6 +372,9 @@ class LayeredStrategy:
         conviction = decision.conviction if hasattr(decision, 'conviction') else 5.0
         reasoning = decision.reasoning if hasattr(decision, 'reasoning') else "No reasoning provided"
         
+        # DEBUG: Log the decision
+        logger.info(f"🔍 Converting decision: action={action}, conviction={conviction}, level={decision_level}")
+        
         # Convert conviction (1-10) to confidence (0.0-1.0)
         confidence = conviction / 10.0
         
@@ -387,6 +420,64 @@ class LayeredStrategy:
             "escalated": False,
             "reason": reason,
             "metadata": metadata or {}
+        }
+    
+    def _build_portfolio_state(
+        self,
+        symbol: str,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        构建投资组合状态信息
+        
+        Args:
+            symbol: 当前分析的股票代码
+            context: 可选的上下文（可能包含portfolio信息）
+            
+        Returns:
+            Portfolio state字典，包含：
+            - current_holdings: 当前持仓 {symbol: {quantity, value, avg_cost}}
+            - available_cash: 可用现金
+            - total_portfolio_value: 总资产
+            - position_for_symbol: 当前symbol的持仓（如果有）
+            - position_concentration: 各仓位占比
+        """
+        if not context or 'portfolio' not in context:
+            # 如果没有提供portfolio信息，返回默认状态
+            return {
+                'current_holdings': {},
+                'available_cash': 100000.0,  # 默认10万现金
+                'total_portfolio_value': 100000.0,
+                'position_for_symbol': None,
+                'position_concentration': {},
+                'note': 'Default portfolio state (no data provided)'
+            }
+        
+        portfolio = context['portfolio']
+        
+        # 提取关键信息
+        holdings = portfolio.get('holdings', {})
+        cash = portfolio.get('cash', 0.0)
+        total_value = portfolio.get('total_value', cash)
+        
+        # 计算各仓位占比
+        concentration = {}
+        if total_value > 0:
+            for sym, position in holdings.items():
+                position_value = position.get('value', 0.0)
+                concentration[sym] = position_value / total_value
+        
+        # 获取当前symbol的持仓
+        symbol_position = holdings.get(symbol)
+        
+        return {
+            'current_holdings': holdings,
+            'available_cash': cash,
+            'total_portfolio_value': total_value,
+            'position_for_symbol': symbol_position,
+            'position_concentration': concentration,
+            'holdings_count': len(holdings),
+            'cash_ratio': cash / total_value if total_value > 0 else 1.0
         }
     
     def get_decision_summary(self) -> Dict[str, Any]:
@@ -435,6 +526,20 @@ class LayeredStrategy:
             # Could clear state from database here if needed
             pass
         logger.info("LayeredStrategy state reset")
+    
+    async def _connect_agents(self, meta_agent, technical_agent, news_agent):
+        """Connect specialist agents to meta agent (async helper)"""
+        await meta_agent.connect_to_agent(
+            agent_name="technical",
+            agent_instance=technical_agent,
+            description="Technical analysis specialist - provides indicators, signals, and chart patterns"
+        )
+        await meta_agent.connect_to_agent(
+            agent_name="news",
+            agent_instance=news_agent,
+            description="News sentiment specialist - analyzes news articles and market sentiment"
+        )
+        logger.info("✓ Connected TechnicalAgent and NewsAgent to MetaAgent")
 
 
 # Convenience functions for common use cases

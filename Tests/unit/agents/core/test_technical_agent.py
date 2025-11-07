@@ -38,10 +38,9 @@ class TestTechnicalAnalysisAgent:
     
     def test_initialization_with_cache_ttl(self):
         """测试带缓存TTL的初始化"""
-        agent = TechnicalAnalysisAgent(cache_ttl=7200, price_cache_ttl=1800)
+        agent = TechnicalAnalysisAgent(cache_ttl=7200)
         
         assert agent.cache_ttl == 7200
-        assert agent.price_cache_ttl == 1800
 
 
 class TestIndicatorCalculation:
@@ -75,7 +74,7 @@ class TestIndicatorCalculation:
     
     def test_calculate_indicators_with_timeframe(self, agent):
         """测试带时间尺度的指标计算"""
-        result = agent.calculate_indicators("AAPL", timeframe="1h")
+        result = agent.calculate_indicators("AAPL", period="3mo")
         
         assert result['symbol'] == "AAPL"
     

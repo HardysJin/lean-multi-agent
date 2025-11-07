@@ -207,6 +207,136 @@ class BaseAgent:
         }
     
     # ════════════════════════════════════════════════
+    # LLM 调用日志
+    # ════════════════════════════════════════════════
+    
+    async def _call_llm_with_logging(
+        self,
+        messages,
+        operation: str = "llm_call",
+        **kwargs
+    ):
+        """
+        调用LLM并记录详细日志（统一方法，避免重复）
+        
+        记录内容：
+        - Prompt内容（DEBUG级别）
+        - 响应内容（DEBUG级别）
+        - Token使用情况（INFO级别）
+        - 调用耗时（INFO级别）
+        
+        Args:
+            messages: 传递给LLM的消息
+            operation: 操作名称（用于日志标识）
+            **kwargs: 传递给LLM的其他参数
+            
+        Returns:
+            LLM响应
+        """
+        import time
+        
+        # 提取消息内容用于日志
+        message_preview = self._extract_message_preview(messages)
+        
+        # 记录调用开始（DEBUG级别显示详细prompt）
+        self.logger.debug(f"[{operation}] LLM Call Starting")
+        self.logger.debug(f"[{operation}] Prompt Preview: {message_preview[:100]}...")
+        
+        # 如果需要看完整prompt（可通过环境变量控制）
+        import os
+        if os.getenv('LOG_FULL_PROMPTS', 'false').lower() == 'true':
+            self.logger.debug(f"[{operation}] Full Prompt:\n{message_preview}")
+        
+        start_time = time.time()
+        
+        try:
+            # 调用LLM
+            if hasattr(self.llm, 'ainvoke'):
+                response = await self.llm.ainvoke(messages, **kwargs)
+            else:
+                response = self.llm.invoke(messages, **kwargs)
+            
+            elapsed = time.time() - start_time
+            
+            # 提取响应内容
+            response_content = self._extract_response_content(response)
+            
+            # 记录响应（INFO显示摘要，DEBUG显示详细）
+            self.logger.info(
+                f"[{operation}] LLM Response received in {elapsed:.2f}s "
+                f"(~{len(response_content)} chars)"
+            )
+            self.logger.debug(f"[{operation}] Response Preview: {response_content[:100]}...")
+            
+            # 如果需要看完整响应
+            if os.getenv('LOG_FULL_RESPONSES', 'false').lower() == 'true':
+                self.logger.debug(f"[{operation}] Full Response:\n{response_content}")
+            
+            # 尝试提取token使用情况（如果可用）
+            self._log_token_usage(response, operation)
+            
+            return response
+            
+        except Exception as e:
+            elapsed = time.time() - start_time
+            self.logger.error(
+                f"[{operation}] LLM Call Failed after {elapsed:.2f}s: {type(e).__name__}: {str(e)}"
+            )
+            raise
+    
+    def _extract_message_preview(self, messages) -> str:
+        """提取消息内容预览"""
+        if isinstance(messages, str):
+            return messages
+        elif isinstance(messages, list):
+            parts = []
+            for msg in messages:
+                if hasattr(msg, 'content'):
+                    parts.append(f"[{getattr(msg, 'type', 'unknown')}]: {msg.content}")
+                elif isinstance(msg, dict) and 'content' in msg:
+                    parts.append(f"[{msg.get('role', 'unknown')}]: {msg['content']}")
+            return "\n".join(parts)
+        elif hasattr(messages, 'content'):
+            return messages.content
+        else:
+            return str(messages)
+    
+    def _extract_response_content(self, response) -> str:
+        """提取响应内容"""
+        if hasattr(response, 'content'):
+            return response.content
+        elif isinstance(response, dict) and 'content' in response:
+            return response['content']
+        else:
+            return str(response)
+    
+    def _log_token_usage(self, response, operation: str):
+        """记录token使用情况（如果可用）"""
+        try:
+            # OpenAI response structure
+            if hasattr(response, 'response_metadata'):
+                metadata = response.response_metadata
+                if 'token_usage' in metadata:
+                    usage = metadata['token_usage']
+                    self.logger.info(
+                        f"[{operation}] Token Usage: "
+                        f"prompt={usage.get('prompt_tokens', '?')}, "
+                        f"completion={usage.get('completion_tokens', '?')}, "
+                        f"total={usage.get('total_tokens', '?')}"
+                    )
+            # Claude response structure
+            elif hasattr(response, 'usage'):
+                usage = response.usage
+                self.logger.info(
+                    f"[{operation}] Token Usage: "
+                    f"input={getattr(usage, 'input_tokens', '?')}, "
+                    f"output={getattr(usage, 'output_tokens', '?')}"
+                )
+        except Exception:
+            # Token usage不可用时静默跳过
+            pass
+    
+    # ════════════════════════════════════════════════
     # 工具方法
     # ════════════════════════════════════════════════
     

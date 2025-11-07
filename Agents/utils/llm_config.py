@@ -416,6 +416,7 @@ class MockLLM:
         """模拟LangChain的invoke接口"""
         from langchain_core.messages import AIMessage
         from datetime import datetime
+        import json
         
         # 记录调用
         self.call_count += 1
@@ -429,9 +430,76 @@ class MockLLM:
         if self.response_func:
             content = self.response_func(messages, **kwargs)
         else:
-            content = self.response
+            # 智能检测是否需要JSON响应
+            content = self._generate_smart_response(messages)
         
         return AIMessage(content=content)
+    
+    def _generate_smart_response(self, messages):
+        """智能生成响应（检测是否需要JSON）"""
+        import json
+        
+        # 提取消息内容
+        message_text = ""
+        if isinstance(messages, list):
+            for msg in messages:
+                if hasattr(msg, 'content'):
+                    message_text += msg.content + "\n"
+                elif isinstance(msg, dict) and 'content' in msg:
+                    message_text += msg['content'] + "\n"
+        elif hasattr(messages, 'content'):
+            message_text = messages.content
+        elif isinstance(messages, str):
+            message_text = messages
+        
+        message_lower = message_text.lower()
+        
+        # 优先检测trading decision请求（因为可能包含macro等其他关键词）
+        if any(word in message_lower for word in ['trading decision', 'buy', 'sell', 'hold', 'action:', 'analyze the trading']):
+            # 简化逻辑：总是返回BUY用于测试
+            # 这样可以验证信号生成流程是否工作
+            action = "BUY"
+            conviction = 8
+            reasoning = "Mock response - TEST MODE: Always BUY to verify signal generation pipeline. Strong bullish indicators detected with positive momentum."
+            
+            return f"""ACTION: {action}
+CONVICTION: {conviction}
+REASONING: {reasoning}"""
+        
+        # 检测macro agent请求（需要JSON）
+        if 'macro' in message_lower and ('json' in message_lower or 'market_regime' in message_lower):
+            return json.dumps({
+                "market_regime": "bull",
+                "regime_confidence": 0.75,
+                "interest_rate_trend": "stable",
+                "current_rate": 5.25,
+                "risk_level": 4.0,
+                "volatility_level": "medium",
+                "gdp_trend": "expanding",
+                "inflation_level": "moderate",
+                "market_sentiment": "greed",
+                "vix_level": 18.5,
+                "confidence_score": 0.7,
+                "reasoning": "Mock macro analysis: Bull market with moderate volatility"
+            }, indent=2)
+        
+        # 检测sector agent请求（需要JSON）
+        if 'sector' in message_lower and 'json' in message_lower:
+            return json.dumps({
+                "trend": "bullish",
+                "relative_strength": 0.65,
+                "momentum": "accelerating",
+                "sector_rotation_signal": "rotating_in",
+                "avg_pe_ratio": 25.0,
+                "avg_growth_rate": 0.15,
+                "sentiment": "bullish",
+                "confidence": 0.8,
+                "recommendation": "overweight",
+                "reasoning": "Mock sector analysis: Technology sector showing strong momentum with accelerating growth"
+            }, indent=2)
+        
+        # 默认响应
+        return self.response
     
     async def ainvoke(self, messages, **kwargs):
         """模拟异步调用"""

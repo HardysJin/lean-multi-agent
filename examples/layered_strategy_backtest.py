@@ -152,8 +152,12 @@ class LayeredStrategyBacktest:
                 # 获取历史数据
                 historical_data = df.loc[:date]
                 
-                if len(historical_data) < 20:
-                    signal_list.append({'action': 'HOLD', 'confidence': 0.5, 'reason': 'Insufficient data'})
+                # For testing with mock LLM, reduce minimum data requirement
+                min_data_requirement = 5 if self.strategy.use_mock_llm else 20
+                
+                if len(historical_data) < min_data_requirement:
+                    signal_list.append({'action': 'HOLD', 'confidence': 0.5, 
+                                      'reason': f'Insufficient data (need {min_data_requirement} days, have {len(historical_data)})'})
                     continue
                 
                 # 调用策略

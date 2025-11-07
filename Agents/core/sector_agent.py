@@ -318,7 +318,11 @@ Respond in JSON format:
         ]
         
         try:
-            response = await self.llm.ainvoke(messages)
+            # 使用统一的日志方法
+            response = await self._call_llm_with_logging(
+                messages,
+                operation=f"sector_analysis_{sector}"
+            )
             content = response.content
             
             # 提取 JSON

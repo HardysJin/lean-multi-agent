@@ -18,12 +18,47 @@ from datetime import datetime, timedelta
 from contextlib import contextmanager
 import json
 import logging
+from dataclasses import asdict, is_dataclass
 
 from .schemas import (
     DecisionRecord,
     HierarchicalConstraints,
     Timeframe,
 )
+
+
+def _serialize_for_json(obj: Any) -> Any:
+    """
+    序列化对象为JSON兼容格式
+    
+    处理：
+    - dataclass对象（如NewsArticle）
+    - datetime对象
+    - 嵌套的list/dict
+    """
+    if obj is None:
+        return None
+    
+    # 处理dataclass
+    if is_dataclass(obj) and not isinstance(obj, type):
+        obj_dict = asdict(obj)
+        # 递归处理嵌套的datetime
+        return _serialize_for_json(obj_dict)
+    
+    # 处理datetime
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    
+    # 处理list
+    if isinstance(obj, list):
+        return [_serialize_for_json(item) for item in obj]
+    
+    # 处理dict
+    if isinstance(obj, dict):
+        return {key: _serialize_for_json(value) for key, value in obj.items()}
+    
+    # 其他类型直接返回
+    return obj
 
 
 class SQLStore:
@@ -190,9 +225,9 @@ class SQLStore:
                     'agent_name': decision.agent_name,
                     'conviction': decision.conviction,
                     'market_regime': decision.market_regime,
-                    'technical_signals': json.dumps(decision.technical_signals) if decision.technical_signals else None,
-                    'fundamental_data': json.dumps(decision.fundamental_data) if decision.fundamental_data else None,
-                    'news_sentiment': json.dumps(decision.news_sentiment) if decision.news_sentiment else None,
+                    'technical_signals': json.dumps(_serialize_for_json(decision.technical_signals)) if decision.technical_signals else None,
+                    'fundamental_data': json.dumps(_serialize_for_json(decision.fundamental_data)) if decision.fundamental_data else None,
+                    'news_sentiment': json.dumps(_serialize_for_json(decision.news_sentiment)) if decision.news_sentiment else None,
                     'related_news_ids': json.dumps(decision.related_news_ids) if decision.related_news_ids else None,
                     'executed': 1 if decision.executed else 0,
                     'execution_price': decision.execution_price,
@@ -203,7 +238,7 @@ class SQLStore:
                     'pnl': decision.pnl,
                     'pnl_percent': decision.pnl_percent,
                     'hold_duration_days': decision.hold_duration_days,
-                    'metadata': json.dumps(decision.metadata) if decision.metadata else None,
+                    'metadata': json.dumps(_serialize_for_json(decision.metadata)) if decision.metadata else None,
                 }
                 
                 # 插入或替换

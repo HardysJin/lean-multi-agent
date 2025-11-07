@@ -43,14 +43,12 @@ class TechnicalAnalysisAgent(BaseAgent):
     def __init__(
         self,
         cache_ttl: int = 3600,  # 1小时缓存
-        price_cache_ttl: int = 3600  # 价格数据缓存1小时
     ):
         """
         初始化技术分析Agent
         
         Args:
             cache_ttl: 指标缓存过期时间（秒）
-            price_cache_ttl: 价格数据缓存过期时间（秒）
         """
         super().__init__(
             name="technical-analysis-agent",
@@ -59,9 +57,7 @@ class TechnicalAnalysisAgent(BaseAgent):
             cache_ttl=cache_ttl
         )
         
-        self.price_cache_ttl = price_cache_ttl
         self._price_data_cache = {}
-        self._price_cache_timestamp = {}
     
     # ═══════════════════════════════════════════════
     # Public APIs - Business Logic
@@ -71,20 +67,24 @@ class TechnicalAnalysisAgent(BaseAgent):
     def calculate_indicators(
         self,
         symbol: str,
-        timeframe: str = "1d"
+        period: str = "3mo",
+        end_date: Optional[str] = None # 格式 'YYYY-MM-DD'
     ) -> Dict[str, Any]:
         """
         计算技术指标
         
         Args:
             symbol: 股票代码
-            timeframe: 时间周期 (5min, 1h, 1d)
+            period: 时间周期 (1mo, 3mo, 6mo, 1y, etc.)
+            end_date: 数据截止日期，用于回测。格式 'YYYY-MM-DD'，默认今天
             
         Returns:
             包含所有指标的字典
         """
         # 检查缓存
-        cache_key = f"indicators_{symbol}_{timeframe}"
+        if end_date is None:
+            end_date = datetime.now().strftime('%Y-%m-%d')
+        cache_key = f"indicators_{symbol}_{period}_{end_date}"
         cached = self._get_from_cache(cache_key)
         if cached:
             self.logger.debug(f"Using cached indicators for {symbol}")
@@ -92,7 +92,7 @@ class TechnicalAnalysisAgent(BaseAgent):
         
         # 计算指标
         if YFINANCE_AVAILABLE and PANDAS_TA_AVAILABLE:
-            indicators = self._calculate_real_indicators(symbol, timeframe)
+            indicators = self._calculate_real_indicators(symbol, period, end_date)
         else:
             self.logger.warning(f"yfinance or pandas-ta not available, using mock data for {symbol}")
             indicators = self._calculate_mock_indicators(symbol)
@@ -341,7 +341,8 @@ class TechnicalAnalysisAgent(BaseAgent):
     def _get_price_data(
         self,
         symbol: str,
-        period: str = "3mo"
+        period: str = "3mo",
+        end_date: Optional[str] = None # 格式 'YYYY-MM-DD'
     ) -> Optional[pd.DataFrame]:
         """
         获取价格数据（带缓存）
@@ -355,18 +356,17 @@ class TechnicalAnalysisAgent(BaseAgent):
         """
         if not YFINANCE_AVAILABLE:
             return None
-        
-        cache_key = f"price_{symbol}_{period}"
+        if end_date is None:
+            end_date = datetime.now().strftime('%Y-%m-%d')
+        cache_key = f"price_{symbol}_{period}_{end_date}"
         
         # 检查缓存
         if cache_key in self._price_data_cache:
-            age = (datetime.now() - self._price_cache_timestamp[cache_key]).total_seconds()
-            if age < self.price_cache_ttl:
-                return self._price_data_cache[cache_key]
+            return self._price_data_cache[cache_key]
         
         try:
             ticker = yf.Ticker(symbol)
-            df = ticker.history(period=period)
+            df = ticker.history(period=period, end=end_date)
             
             if df.empty:
                 self.logger.warning(f"No data returned for {symbol}")
@@ -374,7 +374,6 @@ class TechnicalAnalysisAgent(BaseAgent):
             
             # 缓存数据
             self._price_data_cache[cache_key] = df
-            self._price_cache_timestamp[cache_key] = datetime.now()
             
             return df
         except Exception as e:
@@ -384,7 +383,8 @@ class TechnicalAnalysisAgent(BaseAgent):
     def _calculate_real_indicators(
         self,
         symbol: str,
-        timeframe: str = "1d"
+        period: str = "6mo",
+        end_date: Optional[str] = None # 格式 'YYYY-MM-DD'
     ) -> Dict[str, Any]:
         """
         使用 pandas-ta 计算真实指标
@@ -397,7 +397,7 @@ class TechnicalAnalysisAgent(BaseAgent):
         - ATR (14)
         """
         # 获取价格数据
-        df = self._get_price_data(symbol, period="6mo")
+        df = self._get_price_data(symbol, period=period, end_date=end_date)
         
         if df is None or df.empty:
             self.logger.warning(f"Cannot fetch data for {symbol}, using mock")
@@ -409,61 +409,71 @@ class TechnicalAnalysisAgent(BaseAgent):
             
             result = {
                 'symbol': symbol,
-                'timestamp': datetime.now().isoformat(),
                 'current_price': current_price,
                 'indicators': {}
             }
-            
-            # ===== 使用 pandas-ta 计算所有指标 =====
-            df.ta.rsi(length=14, append=True)
-            df.ta.macd(fast=12, slow=26, signal=9, append=True)
+
+            # 添加所有指标
+            df.ta.adx(length=14, append=True)
+            df.ta.supertrend(length=10, multiplier=3, append=True)
+            df.ta.ema(length=9, append=True)
+            df.ta.ema(length=21, append=True)
+            df.ta.ema(length=30, append=True)  # 改成30，不用55
             df.ta.sma(length=20, append=True)
             df.ta.sma(length=50, append=True)
-            df.ta.sma(length=200, append=True)
+            df.ta.rsi(length=14, append=True)
+            df.ta.stoch(k=14, d=3, append=True)
+            df.ta.cci(length=20, append=True)
+            df.ta.macd(fast=12, slow=26, signal=9, append=True)
+            df.ta.vwap(append=True)
+            df.ta.cmf(length=20, append=True)
+            df.ta.obv(append=True)
             df.ta.bbands(length=20, std=2, append=True)
             df.ta.atr(length=14, append=True)
+
+
+            # 计算衍生特征
+            df['returns'] = df['Close'].pct_change()
+            df['returns_volatility'] = df['returns'].rolling(20).std()
+            df['trend_strength'] = df['ADX_14'] > 25
+            df['price_above_vwap'] = df['Close'] > df['VWAP_D']
+            df['ema_bull'] = (df['EMA_9'] > df['EMA_21']) & (df['EMA_21'] > df['EMA_30'])
+            df['ema_bear'] = (df['EMA_9'] < df['EMA_21']) & (df['EMA_21'] < df['EMA_30'])
+            df['rsi_overbought'] = df['RSI_14'] > 70
+            df['rsi_oversold'] = df['RSI_14'] < 30
+            df['stoch_overbought'] = df['STOCHk_14_3_3'] > 80
+            df['stoch_oversold'] = df['STOCHk_14_3_3'] < 20
+            df['volume_ma20'] = df['Volume'].rolling(20).mean()
+            df['volume_surge'] = df['Volume'] / df['volume_ma20']
+            # df['volume_confirmed'] = df['volume_surge'] > 1.2
+            df['bb_position'] = (df['Close'] - df['BBL_20_2.0_2.0']) / (df['BBU_20_2.0_2.0'] - df['BBL_20_2.0_2.0'])
+            df['macd_bull'] = df['MACD_12_26_9'] > df['MACDs_12_26_9']
+            df['macd_bear'] = df['MACD_12_26_9'] < df['MACDs_12_26_9']
+            df['price_to_sma20_pct'] = (df['Close'] - df['SMA_20']) / df['SMA_20'] * 100
+            df['price_to_sma50_pct'] = (df['Close'] - df['SMA_50']) / df['SMA_50'] * 100
+
+
+            key_cols = ['Close', 'RSI_14', 'MACD_12_26_9', 'ADX_14', 'VWAP_D']
+            df = df.dropna(subset=key_cols)
+            df = df.drop(['Dividends', 'Stock Splits', 'Capital Gains'], axis=1)
+            # df.index = df.index.tz_localize(None).normalize()
+            df.index = df.index.strftime('%Y-%m-%d')
+            df = df.round(2)
+
+            # 只传AI需要的核心列
+            key_cols = [
+                'Close', 'Volume', 'EMA_9', 'EMA_21',
+                'RSI_14', 'MACD_12_26_9', 'ADX_14', 
+                'VWAP_D', 'CMF_20', 'ATRr_14',
+                'SUPERTd_10_3',
+                'trend_strength', 'price_above_vwap'
+            ]
             
-            # 提取指标值
-            result['indicators']['rsi'] = {
-                'value': float(df['RSI_14'].iloc[-1]) if 'RSI_14' in df.columns else 50.0,
-                'signal': self._interpret_rsi(df['RSI_14'].iloc[-1] if 'RSI_14' in df.columns else 50.0)
-            }
-            
-            result['indicators']['macd'] = {
-                'macd': float(df['MACD_12_26_9'].iloc[-1]) if 'MACD_12_26_9' in df.columns else 0.0,
-                'signal': float(df['MACDs_12_26_9'].iloc[-1]) if 'MACDs_12_26_9' in df.columns else 0.0,
-                'histogram': float(df['MACDh_12_26_9'].iloc[-1]) if 'MACDh_12_26_9' in df.columns else 0.0,
-                'signal_interpretation': 'bullish' if (df['MACDh_12_26_9'].iloc[-1] if 'MACDh_12_26_9' in df.columns else 0) > 0 else 'bearish'
-            }
-            
-            # 移动平均线
-            for period, col_name, result_key in [
-                (20, 'SMA_20', 'sma20'),
-                (50, 'SMA_50', 'sma50'),
-                (200, 'SMA_200', 'sma200')
-            ]:
-                sma_value = float(df[col_name].iloc[-1]) if col_name in df.columns else current_price
-                result['indicators'][result_key] = {
-                    'value': sma_value,
-                    'distance_pct': self._calculate_distance(current_price, sma_value)
-                }
-            
-            # 布林带
-            bb_upper = float(df['BBU_20_2.0'].iloc[-1]) if 'BBU_20_2.0' in df.columns else current_price * 1.02
-            bb_middle = float(df['BBM_20_2.0'].iloc[-1]) if 'BBM_20_2.0' in df.columns else current_price
-            bb_lower = float(df['BBL_20_2.0'].iloc[-1]) if 'BBL_20_2.0' in df.columns else current_price * 0.98
-            
-            result['indicators']['bollinger_bands'] = {
-                'upper': bb_upper,
-                'middle': bb_middle,
-                'lower': bb_lower,
-                'position': self._bb_position_numeric(current_price, bb_upper, bb_lower)
-            }
-            
-            # ATR
-            result['indicators']['atr'] = {
-                'value': float(df['ATRr_14'].iloc[-1]) if 'ATRr_14' in df.columns else 0.0
-            }
+            # TODO: save all indicators in cache
+
+            # 只传最近10-20行 给AI使用
+            df_for_ai = df[key_cols].tail(20)
+            result['indicators'] = df_for_ai.reset_index().to_dict(orient='list')
             
             return result
             
