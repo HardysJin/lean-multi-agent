@@ -1,0 +1,83 @@
+# Weekly Strategy System Configuration
+# 周度策略系统配置
+
+system:
+  lookback_days: 7           # N: 收集过去N天的数据（默认7天）
+  forecast_days: 7           # M: 对未来M天进行预测（默认7天）
+  backtest_start: "2020-01-01"
+  backtest_end: "2024-12-31"
+  initial_capital: 100000
+  commission: 0.001  # 0.1% 手续费
+  slippage: 0.001    # 0.1% 滑点
+
+agents:
+  technical:
+    enabled: true
+    indicators:
+      - SMA
+      - RSI
+      - MACD
+      - BB
+      - ATR
+  sentiment:
+    enabled: true
+    sources:
+      - twitter
+      - reddit
+      - news
+  news:
+    enabled: true
+    api_key: "${NEWS_API_KEY}"
+    top_headlines_count: 10
+  macro:
+    enabled: false  # 可选模块
+
+llm:
+  provider: openai  # openai, anthropic, deepseek
+  model: gpt-4o
+  temperature: 0.3
+  max_tokens: 2000
+  can_suggest_positions: true   # LLM是否可建议仓位
+  auto_execute: false            # 是否自动执行LLM建议
+  require_approval: true         # 是否需要人工确认
+  api_key: "${OPENAI_API_KEY}"
+
+risk:
+  max_single_position: 0.3      # 单只股票最多30%
+  min_cash_reserve: 0.2         # 最少20%现金
+  max_weekly_turnover: 0.5      # 单周换手率不超过50%
+  max_drawdown: 0.15            # 最大回撤15%触发熔断
+  stop_loss_pct: 0.05           # 单只股票止损5%
+  validate_before_execute: true # 执行前验证
+
+strategies:
+  available:
+    - grid_trading
+    - momentum
+    - mean_reversion
+    - hold
+  default: hold  # 默认策略（当LLM失败或不确定时）
+
+data_sources:
+  market_data:
+    provider: yfinance
+    cache_enabled: true
+    cache_dir: "./Data/cache"
+  news:
+    provider: newsapi
+    language: en
+  sentiment:
+    twitter:
+      enabled: false  # 需要Twitter API
+    reddit:
+      enabled: false  # 需要Reddit API
+
+database:
+  type: sqlite
+  path: "./Data/sql/weekly_decisions.db"
+  echo: false  # SQLAlchemy日志
+
+logging:
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "./Logs/weekly_system.log"
