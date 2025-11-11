@@ -65,13 +65,12 @@ class SentimentAnalyzer(BaseCollector):
             Dict: VIX数据
         """
         try:
-            vix = yf.download('^VIX', start=start_date, end=end_date, progress=False)
+            # 下载VIX数据
+            vix = yf.download('^VIX', start=start_date, end=end_date, progress=False, auto_adjust=True)
             
-            if vix.empty:
-                return {"current": None, "change": None, "level": "unknown"}
-            
-            current_vix = float(vix['Close'].iloc[-1])
-            start_vix = float(vix['Close'].iloc[0])
+            if not vix.empty:
+                current_vix = float(vix['Close'].iloc[-1].item())  # 使用.item()消除FutureWarning
+                start_vix = float(vix['Close'].iloc[0].item())
             change = current_vix - start_vix
             
             # VIX分级

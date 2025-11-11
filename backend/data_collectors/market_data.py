@@ -76,7 +76,8 @@ class MarketDataCollector(BaseCollector):
                     ticker,
                     start=start_date,
                     end=end_date,
-                    progress=False
+                    progress=False,
+                    auto_adjust=True  # 消除FutureWarning
                 )
                 
                 if data.empty:
