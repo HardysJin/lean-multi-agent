@@ -127,7 +127,9 @@ class WeeklyCoordinator(BaseAgent):
             return decision
             
         except Exception as e:
+            import traceback
             logger.error(f"Error generating decision: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return self._get_fallback_decision()
     
     def _build_user_prompt(self, data: Dict[str, Any], as_of_date: datetime) -> str:
@@ -171,7 +173,7 @@ class WeeklyCoordinator(BaseAgent):
             sentiment_analysis=sentiment_analysis,
             news_summary=news_analysis,
             current_portfolio=current_portfolio,
-            last_period_pnl=f"{last_period_pnl:.2%}",
+            last_period_pnl=f"${last_period_pnl:,.2f}",
             decision_history=decision_history
         )
         
@@ -260,9 +262,31 @@ class WeeklyCoordinator(BaseAgent):
         if not portfolio:
             return "100% cash"
         
+        # 处理新格式的portfolio (包含holdings)
+        if 'holdings' in portfolio:
+            holdings = portfolio['holdings']
+            total_value = portfolio.get('total_value', 100000)
+            cash = portfolio.get('cash', 0)
+            
+            if not holdings:
+                return f"100% cash (${cash:,.2f})"
+            
+            lines = []
+            for symbol, info in holdings.items():
+                weight = info['market_value'] / total_value if total_value > 0 else 0
+                lines.append(f"{symbol}: {weight:.1%} (${info['market_value']:,.2f})")
+            
+            cash_weight = cash / total_value if total_value > 0 else 0
+            lines.append(f"cash: {cash_weight:.1%} (${cash:,.2f})")
+            return ", ".join(lines)
+        
+        # 处理旧格式的portfolio (symbol: weight)
         lines = []
         for symbol, weight in portfolio.items():
-            lines.append(f"{symbol}: {weight:.1%}")
+            if isinstance(weight, (int, float)):
+                lines.append(f"{symbol}: {weight:.1%}")
+            else:
+                lines.append(f"{symbol}: {weight}")
         
         return ", ".join(lines) if lines else "100% cash"
     

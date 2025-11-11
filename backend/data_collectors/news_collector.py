@@ -1,11 +1,12 @@
 """
-News collector using NewsAPI
+News collector using Finnhub
 """
 
 import os
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
+import time
 
 from .base_collector import BaseCollector
 from backend.utils.logger import get_logger
@@ -17,12 +18,11 @@ logger = get_logger(__name__)
 
 
 class NewsCollector(BaseCollector):
-    """新闻收集器（使用NewsAPI）"""
+    """新闻收集器（使用Finnhub）"""
     
     def __init__(
         self,
         api_key: Optional[str] = None,
-        language: str = "en",
         top_headlines_count: int = 10,
         **kwargs
     ):
@@ -30,25 +30,23 @@ class NewsCollector(BaseCollector):
         初始化新闻收集器
         
         Args:
-            api_key: NewsAPI密钥
-            language: 语言
+            api_key: Finnhub API密钥
             top_headlines_count: 获取头条数量
         """
         super().__init__(kwargs)
         # 如果未提供api_key，从环境变量读取
-        self.api_key = api_key or os.getenv('NEWS_API_KEY')
-        self.language = language
+        self.api_key = api_key or os.getenv('FINNHUB_API_KEY')
         self.top_headlines_count = top_headlines_count
         
         if self.api_key:
             try:
-                from newsapi import NewsApiClient
-                self.client = NewsApiClient(api_key=self.api_key)
+                import finnhub
+                self.client = finnhub.Client(api_key=self.api_key)
             except ImportError:
-                logger.warning("newsapi-python not installed. News collection will be disabled.")
+                logger.warning("finnhub-python not installed. News collection will be disabled.")
                 self.client = None
         else:
-            logger.warning("NewsAPI key not provided. News collection will be disabled.")
+            logger.warning("Finnhub API key not provided. News collection will be disabled.")
             self.client = None
     
     def collect(
@@ -63,7 +61,7 @@ class NewsCollector(BaseCollector):
         Args:
             start_date: 开始日期
             end_date: 结束日期
-            **kwargs: 可选参数（query, domains等）
+            **kwargs: 可选参数（symbol等）
         
         Returns:
             Dict: 新闻数据
@@ -75,29 +73,41 @@ class NewsCollector(BaseCollector):
         logger.info(f"Collecting news from {start_date} to {end_date}")
         
         try:
-            # 获取财经类头条
-            query = kwargs.get("query", "stock market OR finance OR trading")
+            # Finnhub使用Unix时间戳
+            from_ts = int(start_date.timestamp())
+            to_ts = int(end_date.timestamp())
             
-            response = self.client.get_everything(
-                q=query,
-                from_param=start_date.strftime('%Y-%m-%d'),
-                to=end_date.strftime('%Y-%m-%d'),
-                language=self.language,
-                sort_by='relevancy',
-                page_size=self.top_headlines_count
-            )
+            # 获取市场新闻（general news）
+            symbol = kwargs.get("symbol", None)
             
-            articles = response.get('articles', [])
+            if symbol:
+                # 获取特定股票新闻
+                news_data = self.client.company_news(
+                    symbol,
+                    _from=start_date.strftime('%Y-%m-%d'),
+                    to=end_date.strftime('%Y-%m-%d')
+                )
+            else:
+                # 获取市场一般新闻
+                news_data = self.client.general_news('general', min_id=0)
+            
+            # 限制数量
+            news_data = news_data[:self.top_headlines_count] if news_data else []
             
             headlines = []
-            for article in articles:
-                headlines.append({
-                    "title": article.get('title', ''),
-                    "description": article.get('description', ''),
-                    "source": article.get('source', {}).get('name', ''),
-                    "published_at": article.get('publishedAt', ''),
-                    "url": article.get('url', '')
-                })
+            for article in news_data:
+                # 检查新闻是否在时间范围内
+                article_ts = article.get('datetime', 0)
+                if from_ts <= article_ts <= to_ts or not symbol:  # general news不过滤时间
+                    headlines.append({
+                        "title": article.get('headline', ''),
+                        "description": article.get('summary', ''),
+                        "source": article.get('source', ''),
+                        "published_at": datetime.fromtimestamp(article_ts).isoformat() if article_ts else '',
+                        "url": article.get('url', ''),
+                        "category": article.get('category', ''),
+                        "related": article.get('related', '')
+                    })
             
             # 生成摘要
             summary = self._generate_summary(headlines)
