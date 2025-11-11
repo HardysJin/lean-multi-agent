@@ -2,11 +2,16 @@
 News collector using NewsAPI
 """
 
+import os
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
+from dotenv import load_dotenv
 
 from .base_collector import BaseCollector
 from backend.utils.logger import get_logger
+
+# 自动加载.env文件
+load_dotenv()
 
 logger = get_logger(__name__)
 
@@ -30,7 +35,8 @@ class NewsCollector(BaseCollector):
             top_headlines_count: 获取头条数量
         """
         super().__init__(kwargs)
-        self.api_key = api_key
+        # 如果未提供api_key，从环境变量读取
+        self.api_key = api_key or os.getenv('NEWS_API_KEY')
         self.language = language
         self.top_headlines_count = top_headlines_count
         
