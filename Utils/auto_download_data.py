@@ -63,6 +63,32 @@ def extract_symbols_from_code(algorithm_path):
         return []
 
 
+def extract_resolution_from_code(algorithm_path):
+    """从算法代码中提取数据分辨率"""
+    try:
+        with open(algorithm_path, 'r', encoding='utf-8') as f:
+            code = f.read()
+        
+        # 匹配 Resolution.MINUTE, Resolution.DAILY 等
+        patterns = [
+            r'add[_-]?equity[_-]?smart\s*\([^,]+,\s*Resolution\.([A-Z]+)',
+            r'add[_-]?equity\s*\([^,]+,\s*Resolution\.([A-Z]+)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, code, re.IGNORECASE)
+            if match:
+                resolution = match.group(1).lower()
+                return resolution
+        
+        # 默认返回 daily
+        return 'daily'
+    
+    except Exception as e:
+        print(f"⚠️  无法提取分辨率: {e}")
+        return 'daily'
+
+
 def extract_dates_from_code(algorithm_path):
     """从算法代码中提取日期范围"""
     try:
@@ -136,13 +162,17 @@ def auto_download_for_algorithm(config_path='/Lean/Launcher/bin/Debug/config.jso
     start_date, end_date = extract_dates_from_code(algo_location)
     print(f"📅 日期范围: {start_date.strftime('%Y-%m-%d')} 至 {end_date.strftime('%Y-%m-%d')}")
     
+    # 提取分辨率
+    resolution = extract_resolution_from_code(algo_location)
+    print(f"📊 数据分辨率: {resolution}")
+    
     # 下载数据
     print("\n" + "-"*80)
     print("📥 开始检查并下载数据...")
     print("-"*80)
     
     try:
-        ensure_data_for_backtest(symbols, start_date, end_date)
+        ensure_data_for_backtest(symbols, start_date, end_date, resolution=resolution)
         print("\n" + "="*80)
         print("✅ 数据准备完成，启动算法...")
         print("="*80 + "\n")

@@ -63,49 +63,59 @@ class SmartAlgorithm(QCAlgorithm):
         '''
         # 只有在启用自动下载时才检查
         if self._enable_auto_download and ticker not in self._data_ensured:
-            self._ensure_data_available(ticker)
+            self._ensure_data_available(ticker, resolution)  # 传递 resolution 参数
             self._data_ensured.add(ticker)
         
         # 调用原始的 add_equity 方法
         return self.add_equity(ticker, resolution, market, fill_forward, 
                               leverage, extended_market_hours)
     
-    def _ensure_data_available(self, symbol):
+    def _ensure_data_available(self, symbol, resolution=Resolution.DAILY):
         '''
         确保股票数据可用（内部方法）
         
         如果数据不足，会自动调用 download_data.py 下载
+        
+        Args:
+            symbol: 股票代码
+            resolution: 数据分辨率
         '''
         try:
             # 导入 download_data 模块（从 Utils 目录）
             import sys
             sys.path.insert(0, '/workspace/Utils')
-            from download_data import check_existing_data, download_and_convert
+            from download_data import check_existing_data, download_and_convert, get_data_dir_for_resolution
             
             # 获取回测日期范围
             start_date_str = self.start_date.strftime('%Y-%m-%d')
             end_date_str = self.end_date.strftime('%Y-%m-%d')
             
+            # 将 Resolution 枚举转换为字符串
+            resolution_str = self._resolution_to_string(resolution)
+            
+            # 获取对应的数据目录（分钟数据需要传递 symbol）
+            data_dir = get_data_dir_for_resolution(resolution_str, symbol)
+            
             # 检查本地数据
-            existing_start, existing_end = check_existing_data(symbol)
+            existing_start, existing_end = check_existing_data(symbol, data_dir, resolution_str)
             
             if existing_start and existing_end:
                 # 判断数据是否充足
                 if existing_start <= self.start_date and existing_end >= self.end_date:
-                    self.debug(f"✅ {symbol}: 本地数据充足")
+                    self.debug(f"✅ {symbol} ({resolution_str}): 本地数据充足")
                     return
                 else:
-                    self.debug(f"⚠️ {symbol}: 数据不足，开始下载...")
+                    self.debug(f"⚠️ {symbol} ({resolution_str}): 数据不足，开始下载...")
             else:
-                self.debug(f"📥 {symbol}: 本地无数据，开始下载...")
+                self.debug(f"📥 {symbol} ({resolution_str}): 本地无数据，开始下载...")
             
             # 下载数据
-            success = download_and_convert(symbol, start_date_str, end_date_str)
+            success = download_and_convert(symbol, start_date_str, end_date_str, data_dir, resolution_str)
             
             if success:
-                self.debug(f"✅ {symbol}: 数据下载完成")
+                self.debug(f"✅ {symbol} ({resolution_str}): 数据下载完成")
             else:
-                self.debug(f"❌ {symbol}: 数据下载失败，回测可能无法正常运行")
+                self.debug(f"❌ {symbol} ({resolution_str}): 数据下载失败，回测可能无法正常运行")
                 self.debug(f"   请手动运行: python3 download_data.py")
                 
         except Exception as e:
@@ -114,6 +124,21 @@ class SmartAlgorithm(QCAlgorithm):
             self.debug(f"   请手动运行: python3 download_data.py")
             self.debug(f"   或在 Docker 外运行:")
             self.debug(f"   cd /path/to/lean-multi-agent && python3 download_data.py")
+    
+    def _resolution_to_string(self, resolution):
+        '''将 Resolution 枚举转换为字符串'''
+        if resolution == Resolution.DAILY:
+            return 'daily'
+        elif resolution == Resolution.HOUR:
+            return 'hour'
+        elif resolution == Resolution.MINUTE:
+            return 'minute'
+        elif resolution == Resolution.SECOND:
+            return 'second'
+        elif resolution == Resolution.TICK:
+            return 'tick'
+        else:
+            return 'daily'  # 默认
     
     def disable_auto_download(self):
         '''禁用自动下载功能（如果不需要）'''
