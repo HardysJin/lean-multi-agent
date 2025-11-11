@@ -83,6 +83,15 @@ class MarketDataCollector(BaseCollector):
                     logger.warning(f"No data for {ticker}")
                     continue
                 
+                # 展平MultiIndex列（如果存在）
+                if isinstance(data.columns, pd.MultiIndex):
+                    data.columns = data.columns.get_level_values(0)
+                
+                # 重置index为Date列，便于序列化
+                data_with_date = data.reset_index()
+                if 'Date' in data_with_date.columns:
+                    data_with_date['Date'] = data_with_date['Date'].dt.strftime('%Y-%m-%d')
+                
                 # 计算技术指标
                 indicators = self._calculate_indicators(data)
                 
@@ -90,7 +99,7 @@ class MarketDataCollector(BaseCollector):
                 weekly_stats = self._calculate_weekly_stats(data)
                 
                 market_data[ticker] = {
-                    "ohlcv": data.to_dict('records'),
+                    "ohlcv": data_with_date.to_dict('records'),
                     "latest_price": float(data['Close'].iloc[-1]) if len(data) > 0 else None,
                     "indicators": indicators,
                     "weekly_stats": weekly_stats

@@ -92,33 +92,34 @@ class DoubleEmaChannelStrategy:
         
         # 生成交易信号
         if self.position == 0:
-            # 买入信号检查
+            # 买入信号检查 - 简化条件，只需要价格突破即可
             signal_breakout = current_price > up1
-            signal_volume = current_volume > avg_volume * self.volume_multiplier
-            signal_trend = current_price > up2
             
-            if signal_breakout and signal_volume and signal_trend:
+            # 可选的确认条件（降低要求）
+            volume_ok = pd.notna(avg_volume) and (avg_volume == 0 or current_volume > avg_volume * 0.8)  # 放宽到0.8倍
+            
+            if signal_breakout and volume_ok:
+                volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
                 return {
                     'action': 'buy',
-                    'reason': f'价格突破蓝色上沿(${up1:.2f})，成交量放大{current_volume/avg_volume:.2f}倍，趋势向上',
-                    'confidence': 0.8,
+                    'reason': f'价格突破蓝色上沿(${up1:.2f})，当前${current_price:.2f}，成交量{volume_ratio:.2f}倍',
+                    'confidence': 0.75,
                     'price': current_price,
                     'indicators': {
                         'up1': up1,
                         'low1': low1,
                         'up2': up2,
                         'low2': low2,
-                        'volume_ratio': current_volume / avg_volume if avg_volume > 0 else 0
+                        'volume_ratio': volume_ratio
                     }
                 }
             else:
                 reasons = []
                 if not signal_breakout:
                     reasons.append(f'未突破蓝色上沿(当前${current_price:.2f} <= UP1 ${up1:.2f})')
-                if not signal_volume:
-                    reasons.append(f'成交量不足(放大{current_volume/avg_volume:.2f}倍 < {self.volume_multiplier}倍)')
-                if not signal_trend:
-                    reasons.append(f'趋势不明确(当前${current_price:.2f} <= UP2 ${up2:.2f})')
+                if not volume_ok:
+                    volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
+                    reasons.append(f'成交量不足(当前{volume_ratio:.2f}倍 < 0.8倍)')
                 
                 return {
                     'action': 'hold',
