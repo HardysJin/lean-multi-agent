@@ -23,12 +23,13 @@ class BaseAgent(ABC):
         self.enabled = self.config.get('enabled', True)
     
     @abstractmethod
-    def analyze(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def analyze(self, data: Dict[str, Any], as_of_date: Optional[datetime] = None) -> Dict[str, Any]:
         """
         分析数据
         
         Args:
             data: 输入数据
+            as_of_date: 决策时间点（用于回测，确保不访问未来数据。默认None=当前时间）
         
         Returns:
             Dict: 分析结果

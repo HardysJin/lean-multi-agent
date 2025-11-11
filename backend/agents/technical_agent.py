@@ -22,19 +22,23 @@ class TechnicalAgent(BaseAgent):
             'SMA', 'RSI', 'MACD', 'BB', 'ATR'
         ])
     
-    def analyze(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def analyze(self, data: Dict[str, Any], as_of_date: Optional[datetime] = None) -> Dict[str, Any]:
         """
         技术分析
         
         Args:
             data: 市场数据（来自MarketDataCollector）
+            as_of_date: 决策时间点（用于回测，默认None=当前时间）
         
         Returns:
             Dict: 技术分析结果
         """
+        if as_of_date is None:
+            as_of_date = datetime.now()
+        
         if not self.validate_input(data):
             logger.warning("Invalid input data for TechnicalAgent")
-            return self._get_empty_analysis()
+            return self._get_empty_analysis(as_of_date)
         
         logger.info("Running technical analysis")
         
@@ -42,7 +46,7 @@ class TechnicalAgent(BaseAgent):
         spy_data = data.get('SPY', {})
         if not spy_data:
             logger.warning("No SPY data available")
-            return self._get_empty_analysis()
+            return self._get_empty_analysis(as_of_date)
         
         indicators = spy_data.get('indicators', {})
         weekly_stats = spy_data.get('weekly_stats', {})
@@ -73,7 +77,7 @@ class TechnicalAgent(BaseAgent):
             "volatility": volatility_analysis,
             "support_resistance": support_resistance,
             "overall_signal": overall_signal,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": as_of_date.isoformat()
         }
     
     def _analyze_trend(self, price: float, indicators: Dict[str, Any]) -> Dict[str, Any]:
@@ -265,13 +269,15 @@ class TechnicalAgent(BaseAgent):
             "reasoning": f"Trend: {trend_dir}, Momentum: {momentum_dir}, Volatility: {vol_level}"
         }
     
-    def _get_empty_analysis(self) -> Dict[str, Any]:
+    def _get_empty_analysis(self, as_of_date: Optional[datetime] = None) -> Dict[str, Any]:
         """返回空分析结果"""
+        if as_of_date is None:
+            as_of_date = datetime.now()
         return {
             "trend": {"direction": "unknown", "strength": 0.5},
             "momentum": {"momentum": "neutral"},
             "volatility": {"level": "unknown"},
             "support_resistance": {},
             "overall_signal": {"signal": "neutral", "confidence": 0.0},
-            "timestamp": datetime.now().isoformat()
+            "timestamp": as_of_date.isoformat()
         }

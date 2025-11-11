@@ -46,7 +46,7 @@ class WeeklyCoordinator(BaseAgent):
         self.can_suggest_positions = self.config.get('can_suggest_positions', True)
         self.require_approval = self.config.get('require_approval', True)
     
-    def analyze(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def analyze(self, data: Dict[str, Any], as_of_date: Optional[datetime] = None) -> Dict[str, Any]:
         """
         综合分析并生成决策
         
@@ -65,6 +65,7 @@ class WeeklyCoordinator(BaseAgent):
                 - current_portfolio: 当前持仓
                 - last_period_pnl: 上期盈亏
                 - decision_history: 历史决策记录
+            as_of_date: 决策时间点（用于回测，默认None=当前时间）
         
         Returns:
             Dict: 决策结果
@@ -80,6 +81,9 @@ class WeeklyCoordinator(BaseAgent):
                     "timestamp": str
                 }
         """
+        if as_of_date is None:
+            as_of_date = datetime.now()
+        
         if not self.validate_input(data):
             logger.warning("Invalid input data for Coordinator")
             return self._get_fallback_decision()
@@ -88,7 +92,7 @@ class WeeklyCoordinator(BaseAgent):
         
         try:
             # 构建prompt
-            user_prompt = self._build_user_prompt(data)
+            user_prompt = self._build_user_prompt(data, as_of_date)
             
             # 调用LLM
             decision = self._call_llm_for_decision(user_prompt)
@@ -99,7 +103,7 @@ class WeeklyCoordinator(BaseAgent):
                 return self._get_fallback_decision()
             
             # 添加时间戳和时间范围信息
-            decision['timestamp'] = datetime.now().isoformat()
+            decision['timestamp'] = as_of_date.isoformat()
             decision['require_approval'] = self.require_approval
             
             # 添加分析和预测期间
@@ -126,19 +130,20 @@ class WeeklyCoordinator(BaseAgent):
             logger.error(f"Error generating decision: {e}")
             return self._get_fallback_decision()
     
-    def _build_user_prompt(self, data: Dict[str, Any]) -> str:
+    def _build_user_prompt(self, data: Dict[str, Any], as_of_date: datetime) -> str:
         """
         构建用户prompt
         
         Args:
             data: 输入数据
+            as_of_date: 决策时间点
         
         Returns:
             str: 格式化的prompt
         """
         # 提取时间范围
         analysis_start = data.get('analysis_start_date', '')
-        analysis_end = data.get('analysis_end_date', datetime.now().strftime('%Y-%m-%d'))
+        analysis_end = data.get('analysis_end_date', as_of_date.strftime('%Y-%m-%d'))
         forecast_start = data.get('forecast_start_date', '')
         forecast_end = data.get('forecast_end_date', '')
         lookback_days = data.get('lookback_days', 7)

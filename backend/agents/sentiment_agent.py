@@ -20,19 +20,23 @@ class SentimentAgent(BaseAgent):
         super().__init__("SentimentAgent", config)
         self.sources = self.config.get('sources', ['news', 'twitter', 'reddit'])
     
-    def analyze(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def analyze(self, data: Dict[str, Any], as_of_date: Optional[datetime] = None) -> Dict[str, Any]:
         """
         情绪分析
         
         Args:
             data: 包含news_data和sentiment_data
+            as_of_date: 决策时间点（用于回测，默认None=当前时间）
         
         Returns:
             Dict: 情绪分析结果
         """
+        if as_of_date is None:
+            as_of_date = datetime.now()
+        
         if not self.validate_input(data):
             logger.warning("Invalid input data for SentimentAgent")
-            return self._get_empty_analysis()
+            return self._get_empty_analysis(as_of_date)
         
         logger.info("Running sentiment analysis")
         
@@ -55,7 +59,7 @@ class SentimentAgent(BaseAgent):
             "vix_sentiment": vix_sentiment,
             "news_sentiment": news_sentiment,
             "overall_sentiment": overall_sentiment,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": as_of_date.isoformat()
         }
     
     def _analyze_vix(self, vix_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -233,11 +237,13 @@ class SentimentAgent(BaseAgent):
             "summary": f"Overall market sentiment is {sentiment} with {risk_level} risk"
         }
     
-    def _get_empty_analysis(self) -> Dict[str, Any]:
+    def _get_empty_analysis(self, as_of_date: Optional[datetime] = None) -> Dict[str, Any]:
         """返回空分析结果"""
+        if as_of_date is None:
+            as_of_date = datetime.now()
         return {
             "vix_sentiment": {"sentiment": "neutral", "score": 0.5},
             "news_sentiment": {"sentiment": "neutral", "score": 0.5},
             "overall_sentiment": {"sentiment": "neutral", "score": 0.5, "risk_level": "unknown"},
-            "timestamp": datetime.now().isoformat()
+            "timestamp": as_of_date.isoformat()
         }

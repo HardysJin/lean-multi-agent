@@ -19,26 +19,30 @@ class NewsAgent(BaseAgent):
         """初始化新闻分析Agent"""
         super().__init__("NewsAgent", config)
     
-    def analyze(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def analyze(self, data: Dict[str, Any], as_of_date: Optional[datetime] = None) -> Dict[str, Any]:
         """
         新闻分析
         
         Args:
             data: 新闻数据
+            as_of_date: 决策时间点（用于回测，默认None=当前时间）
         
         Returns:
             Dict: 新闻分析结果
         """
+        if as_of_date is None:
+            as_of_date = datetime.now()
+        
         if not self.validate_input(data):
             logger.warning("Invalid input data for NewsAgent")
-            return self._get_empty_analysis()
+            return self._get_empty_analysis(as_of_date)
         
         logger.info("Running news analysis")
         
         headlines = data.get('headlines', [])
         
         if not headlines:
-            return self._get_empty_analysis()
+            return self._get_empty_analysis(as_of_date)
         
         # 识别重大事件
         major_events = self._identify_major_events(headlines)
@@ -61,7 +65,7 @@ class NewsAgent(BaseAgent):
             "sector_impacts": sector_impacts,
             "risk_factors": risk_factors,
             "trading_implications": trading_implications,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": as_of_date.isoformat()
         }
     
     def _identify_major_events(self, headlines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -228,12 +232,14 @@ class NewsAgent(BaseAgent):
         
         return "; ".join(implications)
     
-    def _get_empty_analysis(self) -> Dict[str, Any]:
+    def _get_empty_analysis(self, as_of_date: Optional[datetime] = None) -> Dict[str, Any]:
         """返回空分析结果"""
+        if as_of_date is None:
+            as_of_date = datetime.now()
         return {
             "major_events": [],
             "sector_impacts": {},
             "risk_factors": [],
             "trading_implications": "No news data available for analysis",
-            "timestamp": datetime.now().isoformat()
+            "timestamp": as_of_date.isoformat()
         }
