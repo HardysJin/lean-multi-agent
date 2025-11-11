@@ -26,6 +26,9 @@ langchain-community>=0.0.20
 pandas>=2.0.0
 numpy>=1.24.0
 
+# Database
+sqlalchemy>=2.0.0
+
 # Financial data
 yfinance>=0.2.32
 pandas-ta>=0.3.14b
