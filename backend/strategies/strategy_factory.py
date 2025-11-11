@@ -6,6 +6,9 @@
 from typing import Dict, Any, Optional
 from .double_ema_channel import DoubleEmaChannelStrategy
 from .buy_and_hold import BuyAndHoldStrategy
+from .grid_trading import GridTradingStrategy
+from .momentum import MomentumStrategy
+from .mean_reversion import MeanReversionStrategy
 
 
 class StrategyFactory:
@@ -18,6 +21,9 @@ class StrategyFactory:
     STRATEGY_MAP = {
         'double_ema_channel': DoubleEmaChannelStrategy,
         'buy_and_hold': BuyAndHoldStrategy,
+        'grid_trading': GridTradingStrategy,
+        'momentum': MomentumStrategy,
+        'mean_reversion': MeanReversionStrategy,
     }
     
     # 策略别名
@@ -26,6 +32,10 @@ class StrategyFactory:
         'ema': 'double_ema_channel',
         'bah': 'buy_and_hold',
         'hold': 'buy_and_hold',
+        'grid': 'grid_trading',
+        'mom': 'momentum',
+        'mr': 'mean_reversion',
+        'reversion': 'mean_reversion',
     }
     
     @classmethod
