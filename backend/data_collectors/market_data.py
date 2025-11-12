@@ -80,17 +80,19 @@ class MarketDataCollector(BaseCollector):
         """
         logger.info(f"Collecting market data from {start_date} to {end_date}")
         
-        # 检查缓存
-        cache_key = f"{','.join(self.tickers)}_{start_date.date()}_{end_date.date()}"
-        cached_data = self._get_from_cache(cache_key)
-        if cached_data:
-            logger.info("Using cached market data")
-            return cached_data
-        
         market_data = {}
         
         for ticker in self.tickers:
             try:
+                # 为每个ticker单独检查缓存
+                ticker_cache_key = f"{ticker}_{start_date.date()}_{end_date.date()}"
+                cached_ticker_data = self._get_from_cache(ticker_cache_key)
+                
+                if cached_ticker_data:
+                    logger.info(f"Using cached data for {ticker}")
+                    market_data[ticker] = cached_ticker_data
+                    continue
+                
                 # 先尝试 yfinance
                 data = self._fetch_from_yfinance(ticker, start_date, end_date)
                 
@@ -128,20 +130,22 @@ class MarketDataCollector(BaseCollector):
                 # 计算周度统计
                 weekly_stats = self._calculate_weekly_stats(data)
                 
-                market_data[ticker] = {
+                ticker_data = {
                     "ohlcv": data_with_date.to_dict('records'),
                     "latest_price": float(data['Close'].iloc[-1]) if len(data) > 0 else None,
                     "indicators": indicators,
                     "weekly_stats": weekly_stats
                 }
                 
+                market_data[ticker] = ticker_data
+                
+                # 为每个ticker单独缓存
+                if self.cache_enabled:
+                    self._save_to_cache(ticker_cache_key, ticker_data)
+                
             except Exception as e:
                 logger.error(f"Error collecting data for {ticker}: {e}")
                 continue
-        
-        # 缓存数据
-        if self.cache_enabled and market_data:
-            self._save_to_cache(cache_key, market_data)
         
         return market_data
     
