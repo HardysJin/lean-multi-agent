@@ -25,6 +25,10 @@ class BuyAndHoldStrategy:
         self.entry_price = 0
         self.has_bought = False
     
+    def get_required_data_points(self) -> int:
+        """返回策略需要的最小数据点数"""
+        return 1  # 买入持有只需要1个数据点
+    
     def generate_signals(self, market_data: pd.DataFrame) -> Dict[str, Any]:
         """
         生成交易信号

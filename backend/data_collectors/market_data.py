@@ -12,6 +12,7 @@ import pickle
 
 from .base_collector import BaseCollector
 from backend.utils.logger import get_logger
+from backend.config.config_loader import get_config
 
 logger = get_logger(__name__)
 
@@ -30,12 +31,24 @@ class MarketDataCollector(BaseCollector):
         初始化市场数据收集器
         
         Args:
-            tickers: 股票代码列表，默认为["SPY", "QQQ", "^VIX"]
+            tickers: 股票代码列表，默认从config.yaml读取
             cache_enabled: 是否启用缓存
             cache_dir: 缓存目录
         """
         super().__init__(kwargs)
-        self.tickers = tickers or ["SPY", "QQQ", "^VIX"]
+        
+        # 如果未指定tickers，从配置文件读取
+        if tickers is None:
+            try:
+                config = get_config()
+                self.tickers = config.data_sources.market_data.tickers
+                logger.info(f"从配置文件加载tickers: {self.tickers}")
+            except Exception as e:
+                logger.warning(f"无法从配置文件加载tickers，使用默认值: {e}")
+                self.tickers = ["SPY", "QQQ", "^VIX"]
+        else:
+            self.tickers = tickers
+        
         self.cache_enabled = cache_enabled
         self.cache_dir = Path(cache_dir)
         

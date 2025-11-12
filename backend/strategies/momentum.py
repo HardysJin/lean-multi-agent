@@ -30,11 +30,11 @@ class MomentumStrategy:
     def __init__(
         self,
         momentum_period: int = 20,
-        entry_threshold: float = 3.0,   # 3%上涨动量
-        exit_threshold: float = -2.0,   # -2%下跌动量
+        entry_threshold: float = 1.5,   # 1.5%上涨动量（进一步降低买入门槛）
+        exit_threshold: float = -1.0,   # -1%下跌动量（更及时止损）
         ma_period: int = 50,
-        volume_multiplier: float = 1.5,
-        use_rsi_filter: bool = True,    # 使用RSI过滤器
+        volume_multiplier: float = 1.0,  # 1.0倍（不要求成交量放大）
+        use_rsi_filter: bool = False,   # 关闭RSI过滤器（避免错过买入机会）
         rsi_period: int = 14,
         rsi_overbought: float = 70,
         rsi_oversold: float = 30
@@ -67,6 +67,10 @@ class MomentumStrategy:
         self.position = 0
         self.entry_price = 0
         self.entry_momentum = 0
+    
+    def get_required_data_points(self) -> int:
+        """返回策略需要的最小数据点数"""
+        return max(self.momentum_period, self.ma_period, self.rsi_period) + 1
     
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> float:
         """
@@ -193,10 +197,13 @@ class MomentumStrategy:
             momentum_weak = momentum < self.exit_threshold
             momentum_declining = momentum < previous['momentum']  # 动量递减
             price_below_ma = current_price < ma
+            take_profit = profit_pct > 6.0  # 止盈：盈利超过6%（降低止盈门槛）
             
-            # 卖出条件：动量转负 或 价格跌破均线+动量下降
-            if momentum_weak or (price_below_ma and momentum_declining):
+            # 卖出条件：动量转负 或 价格跌破均线+动量下降 或 止盈
+            if momentum_weak or (price_below_ma and momentum_declining) or take_profit:
                 reasons = []
+                if take_profit:
+                    reasons.append(f'止盈{profit_pct:.2f}%')
                 if momentum_weak:
                     reasons.append(f'动量转弱{momentum:.2f}%')
                 if price_below_ma:

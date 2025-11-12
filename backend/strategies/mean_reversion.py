@@ -69,6 +69,10 @@ class MeanReversionStrategy:
         self.position = 0
         self.entry_price = 0
     
+    def get_required_data_points(self) -> int:
+        """返回策略需要的最小数据点数"""
+        return max(self.ma_period, self.rsi_period) + 1
+    
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> float:
         """
         计算RSI指标

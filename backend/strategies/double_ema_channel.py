@@ -49,6 +49,10 @@ class DoubleEmaChannelStrategy:
         self.entry_price = 0
         self.position = 0
     
+    def get_required_data_points(self) -> int:
+        """返回策略需要的最小数据点数"""
+        return self.slow_period + 5  # 慢速通道周期 + 成交量MA窗口
+    
     def generate_signals(self, market_data: pd.DataFrame) -> Dict[str, Any]:
         """
         基于市场数据生成交易信号

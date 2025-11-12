@@ -22,6 +22,7 @@ from backend.agents.coordinator import WeeklyCoordinator
 from backend.data_collectors.market_data import MarketDataCollector
 from backend.data_collectors.news_collector import NewsCollector
 from backend.data_collectors.sentiment_analyzer import SentimentAnalyzer
+from backend.config.config_loader import get_config
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -32,21 +33,20 @@ class LLMBacktestEngine:
     
     def __init__(
         self,
-        initial_capital: float = 100000.0,
-        commission: float = 0.001,  # 0.1%
-        decision_frequency: str = 'weekly'  # weekly
+        config_path: str = None, # 默认使用backend/config/config.yaml
     ):
         """
         初始化回测引擎
         
         Args:
-            initial_capital: 初始资金
-            commission: 手续费率
-            decision_frequency: 决策频率（目前只支持weekly）
+            config_path: 配置文件路径，默认使用backend/config/config.yaml
         """
-        self.initial_capital = initial_capital
-        self.commission = commission
-        self.decision_frequency = decision_frequency
+        # 加载配置
+        self.config = get_config(config_path)
+        
+        # 使用参数或配置中的值
+        self.initial_capital = self.config.system.initial_capital
+        self.commission = self.config.system.commission
         
         # 初始化Agents
         logger.info("初始化Agents...")
@@ -57,12 +57,12 @@ class LLMBacktestEngine:
         
         # 初始化数据收集器
         logger.info("初始化数据收集器...")
-        self.market_collector = MarketDataCollector(tickers=["SPY", "QQQ", "^VIX"])
+        self.market_collector = MarketDataCollector(tickers=["SPY", "QQQ", "^VIX", "TQQQ", "SOXL"])  # 添加更多标的
         self.news_collector = NewsCollector()  # 自动加载API key
         self.sentiment_collector = SentimentAnalyzer()
         
         # 回测状态
-        self.cash = initial_capital
+        self.cash = self.initial_capital
         self.positions = {}  # {symbol: shares}
         self.trades = []
         self.decisions = []
@@ -71,36 +71,46 @@ class LLMBacktestEngine:
     def run(
         self,
         symbol: str,
-        start_date: datetime,
-        end_date: datetime,
-        lookback_days: int = 30
+        start_date: datetime = None,
+        end_date: datetime = None,
+        lookback_days: int = None
     ) -> Dict[str, Any]:
         """
         运行回测
         
         Args:
             symbol: 交易标的
-            start_date: 回测开始日期
-            end_date: 回测结束日期
-            lookback_days: 每次决策时回看的历史天数
+            start_date: 回测开始日期（None则使用config中的配置）
+            end_date: 回测结束日期（None则使用config中的配置）
+            lookback_days: 每次决策时回看的历史日历天数（None则使用config中的lookback_days * 5，确保有足够交易日）
         
         Returns:
             回测结果
         """
+        # 使用参数或配置中的值
+        if start_date is None:
+            start_date = datetime.strptime(self.config.system.backtest_start, '%Y-%m-%d')
+        if end_date is None:
+            end_date = datetime.strptime(self.config.system.backtest_end, '%Y-%m-%d')
+        if lookback_days is None:
+            # 配置中的lookback_days是交易日数，转换为日历天数（大约需要乘以1.4）
+            lookback_days = int(self.config.system.lookback_days * 1.5)
         logger.info("=" * 80)
         logger.info("开始LLM多Agent回测")
         logger.info("=" * 80)
         logger.info(f"标的: {symbol}")
         logger.info(f"期间: {start_date.date()} 到 {end_date.date()}")
         logger.info(f"初始资金: ${self.initial_capital:,.2f}")
-        logger.info(f"决策频率: {self.decision_frequency}")
+        logger.info(f"决策频率: {self.config.system.forecast_days}天")
+        logger.info(f"Lookback天数: {lookback_days}天（约{int(lookback_days * 5/7)}个交易日）")
         
-        # 下载完整市场数据（包含lookback）
-        data_start = start_date - timedelta(days=lookback_days + 10)  # 多留10天buffer
-        logger.info(f"下载市场数据: {data_start.date()} 到 {end_date.date()}")
+        # 下载完整市场数据（回测期间 + lookback期间）
+        # 使用日历天数确保有足够的交易日
+        warming_start_date = start_date - timedelta(days=lookback_days)
+        logger.info(f"下载市场数据: {warming_start_date.date()} 到 {end_date.date()}")
         
         full_market_data = self.market_collector.collect(
-            start_date=data_start,
+            start_date=warming_start_date,
             end_date=end_date
         )
         
@@ -179,33 +189,64 @@ class LLMBacktestEngine:
             
             decision = self.coordinator.analyze(coordinator_input, as_of_date=decision_date)
             
-            logger.info(f"决策: {decision.get('recommended_strategy', 'N/A')}")
+            logger.info(f"LLM决策: {decision.get('recommended_strategy', 'N/A')}")
             logger.info(f"信心: {decision.get('confidence', 0):.2f}")
             logger.info(f"推理: {decision.get('reasoning', 'N/A')[:100]}...")
             
-            # 执行决策
-            execution_result = self._execute_decision(
-                symbol=symbol,
-                decision=decision,
-                price_df=price_df,
-                decision_date=decision_date
-            )
-            
-            # 记录决策和交易
+            # 记录LLM决策
             self.decisions.append({
                 'date': decision_date.strftime('%Y-%m-%d'),
                 'decision': decision,
-                'execution': execution_result
+                'daily_executions': []  # 存储本周每天的执行结果
             })
             
-            # 更新组合价值
-            portfolio_value = self._calculate_portfolio_value(symbol, price_df, decision_date)
-            self.portfolio_values.append({
-                'date': decision_date.strftime('%Y-%m-%d'),
-                'value': portfolio_value,
-                'cash': self.cash,
-                'positions': dict(self.positions)
-            })
+            # 执行策略：在forecast期间（下一周）每天运行策略
+            next_decision_date = decision_dates[i+1] if i+1 < len(decision_dates) else end_date
+            forecast_start = decision_date
+            forecast_end = min(next_decision_date, end_date)
+            
+            logger.info(f"执行期间: {forecast_start.date()} 到 {forecast_end.date()}")
+            
+            # 获取forecast期间的所有交易日
+            forecast_days = price_df[
+                (price_df.index > forecast_start) & 
+                (price_df.index <= forecast_end)
+            ].index
+            
+            logger.info(f"  将在 {len(forecast_days)} 个交易日内每日运行策略")
+            
+            # 每天运行策略
+            for day_idx, trading_day in enumerate(forecast_days, 1):
+                logger.info(f"  Day {day_idx}: {trading_day.date()}")
+                
+                # 执行策略（策略每天检查买卖点）
+                execution_result = self._execute_decision(
+                    symbol=symbol,
+                    decision=decision,
+                    price_df=price_df,
+                    decision_date=trading_day
+                )
+                
+                # 记录每日执行
+                self.decisions[-1]['daily_executions'].append({
+                    'date': trading_day.strftime('%Y-%m-%d'),
+                    'execution': execution_result
+                })
+                
+                # 每天更新组合价值
+                portfolio_value = self._calculate_portfolio_value(symbol, price_df, trading_day)
+                self.portfolio_values.append({
+                    'date': trading_day.strftime('%Y-%m-%d'),
+                    'value': portfolio_value,
+                    'cash': self.cash,
+                    'positions': dict(self.positions)
+                })
+                
+                if execution_result['action'] != 'hold':
+                    logger.info(f"    → {execution_result['action'].upper()}: {execution_result.get('shares', 0)} 股")
+            
+            # 打印本周汇总
+            portfolio_value = self.portfolio_values[-1]['value']
             
             logger.info(f"组合价值: ${portfolio_value:,.2f}")
             logger.info(f"现金: ${self.cash:,.2f}")
@@ -228,7 +269,7 @@ class LLMBacktestEngine:
         
         while current <= end_date:
             dates.append(current)
-            current += timedelta(days=7)
+            current += timedelta(days=self.config.system.forecast_days)
         
         return dates
     
@@ -302,14 +343,96 @@ class LLMBacktestEngine:
         price_df: pd.DataFrame,
         decision_date: datetime
     ) -> Dict[str, Any]:
-        """执行决策 - 修复：正确识别交易信号"""
+        """执行决策 - 调用对应策略的execute方法"""
         
-        strategy = decision.get('recommended_strategy', '').lower()
+        strategy_name = decision.get('recommended_strategy', '').lower()
         current_price = self._get_price_at_date(price_df, decision_date)
         
         if current_price is None:
             logger.warning(f"无法获取{decision_date.date()}的价格")
             return {'action': 'none', 'reason': 'no_price'}
+        
+        # 导入策略工厂
+        from backend.strategies.strategy_factory import StrategyFactory
+        
+        # 获取策略实例
+        try:
+            strategy = StrategyFactory.create_strategy(strategy_name)
+        except ValueError as e:
+            logger.error(f"无法创建策略 {strategy_name}: {e}")
+            return {'action': 'none', 'reason': 'invalid_strategy'}
+        
+        # 准备策略所需的市场数据
+        # 获取策略所需的最小数据点数
+        required_data_points = strategy.get_required_data_points() if hasattr(strategy, 'get_required_data_points') else 50
+        
+        # 传递截止到当前决策日期的所有历史数据（避免看到未来）
+        # 从数据开始到决策日期的所有数据
+        period_prices = price_df[price_df.index <= decision_date].copy()
+        
+        if period_prices.empty:
+            logger.error(f"无法获取截止到 {decision_date.date()} 的价格数据")
+            return {'action': 'none', 'reason': 'no_data'}
+        
+        # 检查数据点是否足够
+        if len(period_prices) < required_data_points:
+            logger.warning(
+                f"策略 {strategy_name} 需要至少 {required_data_points} 个数据点，"
+                f"但只有 {len(period_prices)} 个数据点"
+            )
+            # 如果数据不足，仍然传递给策略，让策略自己决定如何处理
+            # 策略内部会返回hold信号
+        
+        # 同步策略的持仓状态（从回测引擎传递）
+        if hasattr(strategy, 'position'):
+            strategy.position = 1 if self.positions.get(symbol, 0) > 0 else 0
+        if hasattr(strategy, 'entry_price') and strategy.position == 1:
+            # 获取入场价格（从交易记录中查找最后一次买入价）
+            for trade in reversed(self.trades):
+                if trade['action'] == 'buy':
+                    strategy.entry_price = trade['price']
+                    break
+        
+        # 调用策略的generate_signals方法
+        strategy_result = strategy.generate_signals(period_prices)
+        
+        if not strategy_result or 'action' not in strategy_result:
+            logger.warning(f"策略 {strategy_name} 未生成有效信号")
+            return {'action': 'none', 'reason': 'no_signal'}
+        
+        # 获取策略返回的action
+        action = strategy_result['action'].lower()
+        reason = strategy_result.get('reason', 'N/A')
+        confidence = strategy_result.get('confidence', 0.0)
+        
+        logger.info(f"策略 {strategy_name} 决策: {action}")
+        logger.info(f"理由: {reason}")
+        logger.info(f"信心: {confidence:.2f}")
+        
+        # 将策略action转换为信号：buy=1, sell=-1, hold=0
+        if action == 'buy':
+            signal = 1
+        elif action == 'sell':
+            signal = -1
+        else:  # hold
+            signal = 0
+        
+        # 根据信号执行交易
+        return self._execute_trade_from_signal(
+            symbol=symbol,
+            signal=signal,
+            current_price=current_price,
+            decision_date=decision_date
+        )
+    
+    def _execute_trade_from_signal(
+        self,
+        symbol: str,
+        signal: int,
+        current_price: float,
+        decision_date: datetime
+    ) -> Dict[str, Any]:
+        """根据信号执行交易"""
         
         current_position = self.positions.get(symbol, 0)
         
@@ -321,8 +444,7 @@ class LLMBacktestEngine:
             'cost': 0
         }
         
-        # 修复：grid_trading, momentum, mean_reversion都是买入信号
-        if strategy in ['grid_trading', 'momentum', 'mean_reversion', 'double_ema_channel', 'buy_and_hold']:
+        if signal == 1:  # 买入信号
             if current_position == 0:
                 # 买入（使用50%资金）
                 available_cash = self.cash * 0.5
@@ -341,11 +463,10 @@ class LLMBacktestEngine:
                     logger.info(f"✓ 买入 {shares} 股 @ ${current_price:.2f}, 成本: ${cost:.2f}")
             else:
                 logger.info(f"已持仓 {current_position} 股，跳过买入")
+                execution['action'] = 'hold'
         
-        elif strategy == 'hold':
+        elif signal == -1:  # 卖出信号
             if current_position > 0:
-                # hold策略：如果有持仓，考虑卖出
-                logger.info("策略建议持有现金，卖出现有持仓")
                 shares = current_position
                 proceeds = shares * current_price * (1 - self.commission)
                 self.cash += proceeds
@@ -358,8 +479,12 @@ class LLMBacktestEngine:
                 self.trades.append(execution.copy())
                 logger.info(f"✓ 卖出 {shares} 股 @ ${current_price:.2f}, 收入: ${proceeds:.2f}")
             else:
+                logger.info("无持仓，跳过卖出")
                 execution['action'] = 'hold'
-                logger.info("持有现金")
+        
+        else:  # signal == 0，持有
+            execution['action'] = 'hold'
+            logger.info("策略信号: 持有")
         
         return execution
     

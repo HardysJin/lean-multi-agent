@@ -2,10 +2,10 @@
 # 周度策略系统配置
 
 system:
-  lookback_days: 7           # N: 收集过去N天的数据（默认7天）
-  forecast_days: 7           # M: 对未来M天进行预测（默认7天）
-  backtest_start: "2020-01-01"
-  backtest_end: "2024-12-31"
+  lookback_days: 150          # 回看天数（日历天数，约107个交易日，确保策略有足够数据）
+  forecast_days: 14            # 预测天数（决策的有效期，每周一次）
+  backtest_start: "2025-10-20"
+  backtest_end: "2025-11-01"
   initial_capital: 100000
   commission: 0.001  # 0.1% 手续费
   slippage: 0.001    # 0.1% 滑点
@@ -63,6 +63,14 @@ data_sources:
     provider: yfinance
     cache_enabled: true
     cache_dir: "./Data/cache"
+    tickers:  # 默认标的列表
+      - SPY    # S&P 500 ETF
+      - QQQ    # Nasdaq 100 ETF
+      - ^VIX   # 波动率指数
+      - TQQQ   # 3x Nasdaq ETF
+      - SOXL   # 3x 半导体 ETF
+      - TLT    # 20年国债 ETF
+      - GLD    # 黄金ETF
   news:
     provider: newsapi
     language: en

@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 import json
 
+from backend.config.config_loader import get_config
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -28,21 +29,25 @@ class BacktestEngine:
     
     def __init__(
         self,
-        initial_capital: float = 100000.0,
-        commission: float = 0.001,  # 0.1% 手续费
-        slippage: float = 0.0005,   # 0.05% 滑点
+        initial_capital: float = None,
+        commission: float = None,
+        slippage: float = None,
     ):
         """
         初始化回测引擎
         
         Args:
-            initial_capital: 初始资金
-            commission: 手续费率
-            slippage: 滑点率
+            initial_capital: 初始资金（None则使用config）
+            commission: 手续费率（None则使用config）
+            slippage: 滑点率（None则使用config）
         """
-        self.initial_capital = initial_capital
-        self.commission = commission
-        self.slippage = slippage
+        # 加载配置
+        config = get_config()
+        
+        # 使用参数或配置中的值
+        self.initial_capital = initial_capital if initial_capital is not None else config.system.initial_capital
+        self.commission = commission if commission is not None else config.system.commission
+        self.slippage = slippage if slippage is not None else config.system.slippage
         
         # 回测结果
         self.trades = []
@@ -62,8 +67,9 @@ class BacktestEngine:
         Args:
             strategy: 策略实例（需要有generate_signals方法）
             market_data: 市场数据DataFrame，包含OHLCV列
-            start_date: 开始日期（可选）
-            end_date: 结束日期（可选）
+                注意：market_data应该包含回测期间之前的lookback数据
+            start_date: 回测开始日期（可选）
+            end_date: 回测结束日期（可选）
         
         Returns:
             回测结果字典
@@ -72,18 +78,25 @@ class BacktestEngine:
         logger.info("开始回测")
         logger.info("=" * 70)
         
-        # 准备数据
-        df = market_data.copy()
-        if start_date:
-            df = df[df.index >= start_date]
-        if end_date:
-            df = df[df.index <= end_date]
+        # 准备数据 - market_data应该已经包含lookback数据
+        # 我们使用所有可用数据，但只在start_date到end_date之间进行交易
+        full_data = market_data.copy()
+        
+        # 确定回测的实际交易范围
+        if start_date is None:
+            start_date = full_data.index[0]
+        if end_date is None:
+            end_date = full_data.index[-1]
+        
+        # 过滤出截止到end_date的数据（避免看到未来）
+        df = full_data[full_data.index <= end_date].copy()
         
         if len(df) == 0:
             raise ValueError("没有数据用于回测")
         
-        logger.info(f"回测期间: {df.index[0]} 到 {df.index[-1]}")
-        logger.info(f"数据点数: {len(df)}")
+        logger.info(f"数据范围: {df.index[0]} 到 {df.index[-1]}")
+        logger.info(f"回测期间: {start_date.date() if hasattr(start_date, 'date') else start_date} 到 {end_date.date() if hasattr(end_date, 'date') else end_date}")
+        logger.info(f"总数据点数: {len(df)}")
         logger.info(f"初始资金: ${self.initial_capital:,.2f}")
         
         # 初始化回测状态
@@ -98,10 +111,13 @@ class BacktestEngine:
         
         # 逐日回测
         for i in range(len(df)):
-            current_data = df.iloc[:i+1]
+            current_data = df.iloc[:i+1]  # 策略能看到从开始到当前的所有历史数据
             current_bar = df.iloc[i]
             current_price = current_bar['Close']
             current_date = df.index[i]
+            
+            # 只在回测期间内进行交易和记录
+            in_backtest_period = current_date >= start_date
             
             # 更新策略状态
             if hasattr(strategy, 'entry_price'):
@@ -112,6 +128,11 @@ class BacktestEngine:
             # 生成信号
             signal = strategy.generate_signals(current_data)
             action = signal.get('action', 'hold')
+            
+            # 只在回测期间内执行交易
+            if not in_backtest_period:
+                # 在回测期间之前，只更新策略状态，不执行交易
+                continue
             
             # 执行交易
             if action == 'buy' and position == 0:

@@ -66,6 +66,19 @@ class DatabaseConfig(BaseModel):
     echo: bool = False
 
 
+class MarketDataConfig(BaseModel):
+    """市场数据配置"""
+    provider: str = "yfinance"
+    cache_enabled: bool = True
+    cache_dir: str = "./Data/cache"
+    tickers: list = ["SPY", "QQQ", "^VIX"]
+
+
+class DataSourcesConfig(BaseModel):
+    """数据源配置"""
+    market_data: MarketDataConfig = Field(default_factory=MarketDataConfig)
+
+
 class Config(BaseSettings):
     """全局配置类"""
     system: SystemConfig = Field(default_factory=SystemConfig)
@@ -74,6 +87,7 @@ class Config(BaseSettings):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     strategies: StrategyConfig = Field(default_factory=StrategyConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    data_sources: DataSourcesConfig = Field(default_factory=DataSourcesConfig)
     
     class Config:
         env_file = ".env"
@@ -119,13 +133,19 @@ def load_config(config_path: Optional[str] = None) -> Config:
     strategies_cfg = StrategyConfig(**config_data.get('strategies', {}))
     database_cfg = DatabaseConfig(**config_data.get('database', {}))
     
+    # 解析数据源配置
+    data_sources_data = config_data.get('data_sources', {})
+    market_data_cfg = MarketDataConfig(**data_sources_data.get('market_data', {}))
+    data_sources_cfg = DataSourcesConfig(market_data=market_data_cfg)
+    
     config = Config(
         system=system_cfg,
         agents=agents_cfg,
         llm=llm_cfg,
         risk=risk_cfg,
         strategies=strategies_cfg,
-        database=database_cfg
+        database=database_cfg,
+        data_sources=data_sources_cfg
     )
     
     return config
@@ -154,11 +174,11 @@ def _replace_env_vars(data: Any) -> Any:
 _config: Optional[Config] = None
 
 
-def get_config() -> Config:
+def get_config(config_path: Optional[str] = None) -> Config:
     """获取全局配置实例"""
     global _config
     if _config is None:
-        _config = load_config()
+        _config = load_config(config_path)
     return _config
 
 

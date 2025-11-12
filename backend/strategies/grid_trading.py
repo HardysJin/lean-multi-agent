@@ -62,6 +62,10 @@ class GridTradingStrategy:
         self.positions = {}  # {grid_index: quantity} 每个网格的持仓
         self.total_position = 0
         self.last_action_price = 0
+    
+    def get_required_data_points(self) -> int:
+        """返回策略需要的最小数据点数"""
+        return self.lookback_days if self.auto_adjust else 1
         
     def _initialize_grids(self, market_data: pd.DataFrame):
         """
