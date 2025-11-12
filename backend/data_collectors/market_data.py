@@ -1,5 +1,5 @@
 """
-Market data collector using yfinance
+Market data collector using yfinance with Polygon.io fallback
 """
 
 import yfinance as yf
@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 import pickle
+import requests
+import os
 
 from .base_collector import BaseCollector
 from backend.utils.logger import get_logger
@@ -52,6 +54,11 @@ class MarketDataCollector(BaseCollector):
         self.cache_enabled = cache_enabled
         self.cache_dir = Path(cache_dir)
         
+        # Polygon API key (optional fallback)
+        self.polygon_api_key = os.getenv('POLYGON_API_KEY', '').strip()
+        if self.polygon_api_key:
+            logger.info("Polygon.io API key found - will use as fallback for insufficient data")
+        
         if self.cache_enabled:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
     
@@ -84,14 +91,23 @@ class MarketDataCollector(BaseCollector):
         
         for ticker in self.tickers:
             try:
-                # 下载数据
-                data = yf.download(
-                    ticker,
-                    start=start_date,
-                    end=end_date,
-                    progress=False,
-                    auto_adjust=True  # 消除FutureWarning
-                )
+                # 先尝试 yfinance
+                data = self._fetch_from_yfinance(ticker, start_date, end_date)
+                
+                # 检查数据是否充足
+                expected_days = (end_date - start_date).days
+                actual_days = len(data) if not data.empty else 0
+                
+                # 如果数据不足（少于期望天数的30%），且有 Polygon API key，则尝试 Polygon
+                if actual_days < expected_days * 0.3 and self.polygon_api_key:
+                    logger.warning(f"{ticker}: yfinance返回数据不足 ({actual_days}/{expected_days}天)，尝试Polygon.io...")
+                    polygon_data = self._fetch_from_polygon(ticker, start_date, end_date)
+                    
+                    if not polygon_data.empty and len(polygon_data) > actual_days:
+                        logger.info(f"{ticker}: Polygon.io返回 {len(polygon_data)} 条数据 (vs yfinance {actual_days}条)")
+                        data = polygon_data
+                    else:
+                        logger.warning(f"{ticker}: Polygon.io也无法获取更多数据")
                 
                 if data.empty:
                     logger.warning(f"No data for {ticker}")
@@ -128,6 +144,105 @@ class MarketDataCollector(BaseCollector):
             self._save_to_cache(cache_key, market_data)
         
         return market_data
+    
+    def _fetch_from_yfinance(self, ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        """
+        从 yfinance 获取数据
+        
+        Args:
+            ticker: 股票代码
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            pd.DataFrame: OHLCV数据
+        """
+        try:
+            data = yf.download(
+                ticker,
+                start=start_date,
+                end=end_date,
+                progress=False,
+                auto_adjust=True
+            )
+            
+            # 展平MultiIndex列（如果存在）
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+            
+            return data
+        except Exception as e:
+            logger.error(f"Error fetching {ticker} from yfinance: {e}")
+            return pd.DataFrame()
+    
+    def _fetch_from_polygon(self, ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        """
+        从 Polygon.io 获取数据
+        
+        Args:
+            ticker: 股票代码
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            pd.DataFrame: OHLCV数据
+        """
+        if not self.polygon_api_key:
+            logger.warning("Polygon API key not configured")
+            return pd.DataFrame()
+        
+        try:
+            # Polygon Aggregates API
+            start_str = start_date.strftime('%Y-%m-%d')
+            end_str = end_date.strftime('%Y-%m-%d')
+            
+            url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start_str}/{end_str}"
+            params = {
+                'adjusted': 'true',
+                'sort': 'asc',
+                'limit': 50000,
+                'apiKey': self.polygon_api_key
+            }
+            
+            response = requests.get(url, params=params, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get('results'):
+                    results = data['results']
+                    
+                    # 转换为 DataFrame
+                    df = pd.DataFrame(results)
+                    
+                    # 重命名列以匹配 yfinance 格式
+                    df['Date'] = pd.to_datetime(df['t'], unit='ms')
+                    df = df.rename(columns={
+                        'o': 'Open',
+                        'h': 'High',
+                        'l': 'Low',
+                        'c': 'Close',
+                        'v': 'Volume'
+                    })
+                    
+                    # 设置 Date 为索引
+                    df.set_index('Date', inplace=True)
+                    
+                    # 只保留需要的列
+                    df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
+                    
+                    logger.info(f"Successfully fetched {len(df)} bars from Polygon.io for {ticker}")
+                    return df
+                else:
+                    logger.warning(f"No results from Polygon.io for {ticker}")
+                    return pd.DataFrame()
+            else:
+                logger.error(f"Polygon.io API error {response.status_code}: {response.text[:200]}")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            logger.error(f"Error fetching {ticker} from Polygon.io: {e}")
+            return pd.DataFrame()
     
     def _calculate_indicators(self, df: pd.DataFrame) -> Dict[str, Any]:
         """

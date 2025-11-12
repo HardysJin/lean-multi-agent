@@ -4,8 +4,8 @@
 system:
   lookback_days: 150          # 回看天数（日历天数，约107个交易日，确保策略有足够数据）
   forecast_days: 14            # 预测天数（决策的有效期，每周一次）
-  backtest_start: "2025-10-20"
-  backtest_end: "2025-11-01"
+  backtest_start: "2025-5-20"
+  backtest_end: "2025-11-11"
   initial_capital: 100000
   commission: 0.001  # 0.1% 手续费
   slippage: 0.001    # 0.1% 滑点
@@ -71,6 +71,7 @@ data_sources:
       - SOXL   # 3x 半导体 ETF
       - TLT    # 20年国债 ETF
       - GLD    # 黄金ETF
+      - BMNR   # ETH 囤币股
   news:
     provider: newsapi
     language: en

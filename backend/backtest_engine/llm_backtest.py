@@ -57,13 +57,16 @@ class LLMBacktestEngine:
         
         # 初始化数据收集器
         logger.info("初始化数据收集器...")
-        self.market_collector = MarketDataCollector(tickers=["SPY", "QQQ", "^VIX", "TQQQ", "SOXL"])  # 添加更多标的
+        # 使用配置中的tickers列表
+        tickers = self.config.data_sources.market_data.tickers if hasattr(self.config.data_sources.market_data, 'tickers') else ["SPY", "QQQ", "^VIX"]
+        self.market_collector = MarketDataCollector(tickers=tickers)
         self.news_collector = NewsCollector()  # 自动加载API key
         self.sentiment_collector = SentimentAnalyzer()
         
         # 回测状态
         self.cash = self.initial_capital
         self.positions = {}  # {symbol: shares}
+        self.position_costs = {}  # {symbol: total_cost} 用于计算平均成本
         self.trades = []
         self.decisions = []
         self.portfolio_values = []
@@ -175,9 +178,9 @@ class LLMBacktestEngine:
                 'analysis_start_date': analysis_start.strftime('%Y-%m-%d'),
                 'analysis_end_date': analysis_end.strftime('%Y-%m-%d'),
                 'forecast_start_date': decision_date.strftime('%Y-%m-%d'),
-                'forecast_end_date': (decision_date + timedelta(days=7)).strftime('%Y-%m-%d'),
-                'lookback_days': lookback_days,
-                'forecast_days': 7,
+                'forecast_end_date': (decision_date + timedelta(days=self.config.system.forecast_days)).strftime('%Y-%m-%d'),
+                'lookback_days': self.config.system.lookback_days,
+                'forecast_days': self.config.system.forecast_days,
                 'market_data': period_data['market_data'],
                 'technical_analysis': technical_result,
                 'sentiment_analysis': sentiment_result,
@@ -246,11 +249,19 @@ class LLMBacktestEngine:
                     logger.info(f"    → {execution_result['action'].upper()}: {execution_result.get('shares', 0)} 股")
             
             # 打印本周汇总
-            portfolio_value = self.portfolio_values[-1]['value']
-            
-            logger.info(f"组合价值: ${portfolio_value:,.2f}")
-            logger.info(f"现金: ${self.cash:,.2f}")
-            logger.info(f"持仓: {self.positions}")
+            if self.portfolio_values:
+                portfolio_value = self.portfolio_values[-1]['value']
+                logger.info(f"组合价值: ${portfolio_value:,.2f}")
+                logger.info(f"现金: ${self.cash:,.2f}")
+                logger.info(f"持仓: {self.positions}")
+            else:
+                # 如果没有交易日，手动计算当前组合价值
+                current_price = self._get_price_at_date(price_df, decision_date)
+                position_value = self.positions.get(symbol, 0) * current_price if current_price else 0
+                portfolio_value = self.cash + position_value
+                logger.info(f"组合价值: ${portfolio_value:,.2f} (无交易日)")
+                logger.info(f"现金: ${self.cash:,.2f}")
+                logger.info(f"持仓: {self.positions}")
         
         # 计算最终结果
         results = self._calculate_results(symbol, price_df, start_date, end_date)
@@ -408,27 +419,19 @@ class LLMBacktestEngine:
         logger.info(f"策略 {strategy_name} 决策: {action}")
         logger.info(f"理由: {reason}")
         logger.info(f"信心: {confidence:.2f}")
-        
-        # 将策略action转换为信号：buy=1, sell=-1, hold=0
-        if action == 'buy':
-            signal = 1
-        elif action == 'sell':
-            signal = -1
-        else:  # hold
-            signal = 0
-        
-        # 根据信号执行交易
-        return self._execute_trade_from_signal(
+
+        # 根据策略结果执行交易
+        return self._execute_trade_from_strategy_result(
             symbol=symbol,
-            signal=signal,
+            strategy_result=strategy_result,
             current_price=current_price,
             decision_date=decision_date
         )
     
-    def _execute_trade_from_signal(
+    def _execute_trade_from_strategy_result(
         self,
         symbol: str,
-        signal: int,
+        strategy_result: Dict[str, Any],
         current_price: float,
         decision_date: datetime
     ) -> Dict[str, Any]:
@@ -444,16 +447,23 @@ class LLMBacktestEngine:
             'cost': 0
         }
         
-        if signal == 1:  # 买入信号
-            if current_position == 0:
-                # 买入（使用50%资金）
-                available_cash = self.cash * 0.5
+        if strategy_result.get('action') == 'buy':  # 买入信号
+            # 单股最大持仓不超过总资金的70%
+            # 买入（使用n%资金）
+            total_assets = self.cash + current_position * current_price
+            current_position_ratio = current_position * current_price / total_assets if total_assets > 0 else 0
+            if current_position_ratio < 0.7:
+                # n = 0.5 if strategy_result.get('confidence', 0) >= 0.85 else 0.3
+                available_cash = total_assets * 0.7 - current_position * current_price
                 shares = int(available_cash / (current_price * (1 + self.commission)))
-                
+
                 if shares > 0:
                     cost = shares * current_price * (1 + self.commission)
                     self.cash -= cost
                     self.positions[symbol] = self.positions.get(symbol, 0) + shares
+                    
+                    # 更新持仓成本
+                    self.position_costs[symbol] = self.position_costs.get(symbol, 0) + cost
                     
                     execution['action'] = 'buy'
                     execution['shares'] = shares
@@ -464,25 +474,40 @@ class LLMBacktestEngine:
             else:
                 logger.info(f"已持仓 {current_position} 股，跳过买入")
                 execution['action'] = 'hold'
-        
-        elif signal == -1:  # 卖出信号
+
+        elif strategy_result.get('action') == 'sell':  # 卖出信号
             if current_position > 0:
-                shares = current_position
+                confidence = strategy_result.get('confidence', 0)
+                # 根据信心调整卖出比例（信心越高，卖出越多）
+                shares = int(current_position * confidence)
                 proceeds = shares * current_price * (1 - self.commission)
+                
+                # 计算这笔卖出的成本（按比例分摊）
+                total_cost = self.position_costs.get(symbol, 0)
+                avg_cost = total_cost / current_position if current_position > 0 else 0
+                sold_cost = shares * avg_cost
+                profit = proceeds - sold_cost
+                
                 self.cash += proceeds
-                self.positions[symbol] = 0
+                self.positions[symbol] = self.positions.get(symbol, 0) - shares
+                assert self.positions[symbol] >= 0, "持仓数量不能为负, 暂不支持卖空"
+                
+                # 更新持仓成本
+                self.position_costs[symbol] = self.position_costs.get(symbol, 0) - sold_cost
                 
                 execution['action'] = 'sell'
                 execution['shares'] = -shares
-                execution['cost'] = -proceeds
+                execution['cost'] = -proceeds  # 保持原有逻辑
+                execution['proceeds'] = proceeds
+                execution['profit'] = profit  # 新增盈亏字段
                 
                 self.trades.append(execution.copy())
-                logger.info(f"✓ 卖出 {shares} 股 @ ${current_price:.2f}, 收入: ${proceeds:.2f}")
+                logger.info(f"✓ 卖出 {shares} 股 @ ${current_price:.2f}, 收入: ${proceeds:.2f}, 盈亏: ${profit:+,.2f}")
             else:
                 logger.info("无持仓，跳过卖出")
                 execution['action'] = 'hold'
         
-        else:  # signal == 0，持有
+        else:  # 持有信号
             execution['action'] = 'hold'
             logger.info("策略信号: 持有")
         
@@ -542,10 +567,14 @@ class LLMBacktestEngine:
         values = [pv['value'] for pv in self.portfolio_values]
         max_drawdown = self._calculate_max_drawdown(values)
         
-        # 胜率
-        winning_trades = sum(1 for t in self.trades if t['action'] == 'sell' and t['cost'] < 0)
+        # 胜率（只统计卖出交易）
+        sell_trades = [t for t in self.trades if t['action'] == 'sell' and 'profit' in t]
+        winning_trades = sum(1 for t in sell_trades if t['profit'] > 0)
+        total_sell_trades = len(sell_trades)
+        win_rate = winning_trades / total_sell_trades if total_sell_trades > 0 else 0
+        
+        # 总交易次数（买入+卖出）
         total_trades = len([t for t in self.trades if t['action'] in ['buy', 'sell']])
-        win_rate = winning_trades / total_trades if total_trades > 0 else 0
         
         results = {
             'summary': {

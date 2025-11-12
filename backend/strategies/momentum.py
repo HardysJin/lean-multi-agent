@@ -31,13 +31,13 @@ class MomentumStrategy:
         self,
         momentum_period: int = 20,
         entry_threshold: float = 1.5,   # 1.5%上涨动量（进一步降低买入门槛）
-        exit_threshold: float = -1.0,   # -1%下跌动量（更及时止损）
+        exit_threshold: float = -2.0,   # -2%下跌动量（更及时止损）
         ma_period: int = 50,
-        volume_multiplier: float = 1.0,  # 1.0倍（不要求成交量放大）
-        use_rsi_filter: bool = False,   # 关闭RSI过滤器（避免错过买入机会）
-        rsi_period: int = 14,
-        rsi_overbought: float = 70,
-        rsi_oversold: float = 30
+        volume_multiplier: float = 1.2,  # 1.2倍（不要求成交量放大）
+        use_rsi_filter: bool = True,   # 关闭RSI过滤器（避免错过买入机会）
+        rsi_period: int = 6,
+        rsi_overbought: float = 75,
+        rsi_oversold: float = 25
     ):
         """
         初始化动量策略
@@ -197,24 +197,25 @@ class MomentumStrategy:
             momentum_weak = momentum < self.exit_threshold
             momentum_declining = momentum < previous['momentum']  # 动量递减
             price_below_ma = current_price < ma
-            take_profit = profit_pct > 6.0  # 止盈：盈利超过6%（降低止盈门槛）
             
-            # 卖出条件：动量转负 或 价格跌破均线+动量下降 或 止盈
-            if momentum_weak or (price_below_ma and momentum_declining) or take_profit:
+            # 卖出条件：动量转负 或 价格跌破均线+动量下降
+            if momentum_weak or (price_below_ma and momentum_declining):
                 reasons = []
-                if take_profit:
-                    reasons.append(f'止盈{profit_pct:.2f}%')
                 if momentum_weak:
                     reasons.append(f'动量转弱{momentum:.2f}%')
                 if price_below_ma:
                     reasons.append(f'跌破MA{self.ma_period}')
                 if momentum_declining:
                     reasons.append('动量递减')
+
+                confidence = {3: 1.0, 2: 0.75, 1: 0.5, 0: 0.0}[
+                    sum([momentum_weak, price_below_ma, momentum_declining])
+                ]
                 
                 return {
                     'action': 'sell',
                     'reason': f'动量卖出：{", ".join(reasons)}，盈利{profit_pct:.2f}%',
-                    'confidence': 0.8,
+                    'confidence': confidence,
                     'price': current_price,
                     'profit_pct': profit_pct,
                     'indicators': {
