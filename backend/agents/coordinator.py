@@ -51,8 +51,20 @@ class WeeklyCoordinator(BaseAgent):
             ["grid_trading", "momentum", "mean_reversion", "double_ema_channel", "buy_and_hold", "hold"])
         self.default_strategy = self.config.get('default_strategy', 'hold')
         
+        # Prompt版本配置（v1=原版简洁，v2=增强版6步regime分类）
+        self.prompt_version = self.config.get('prompt_version', 'v1')
+        
         # 生成系统prompt
-        self.system_prompt = prompts.get_coordinator_system_prompt(self.available_strategies)
+        self.system_prompt = prompts.get_coordinator_system_prompt(
+            self.available_strategies,
+            version=self.prompt_version
+        )
+        
+        # 选择user prompt模板
+        if self.prompt_version == 'v2':
+            self.user_prompt_template = prompts.COORDINATOR_USER_PROMPT_TEMPLATE_V2
+        else:
+            self.user_prompt_template = prompts.COORDINATOR_USER_PROMPT_TEMPLATE
     
     def analyze(self, data: Dict[str, Any], as_of_date: Optional[datetime] = None) -> Dict[str, Any]:
         """
@@ -109,6 +121,10 @@ class WeeklyCoordinator(BaseAgent):
             if not self._validate_decision(decision):
                 logger.warning("Invalid decision from LLM, using fallback")
                 return self._get_fallback_decision()
+            
+            # 将V2嵌套格式转换为扁平格式，保持向后兼容
+            if self.prompt_version == 'v2':
+                decision = self._normalize_v2_decision(decision)
             
             # 添加时间戳和时间范围信息
             decision['timestamp'] = as_of_date.isoformat()
@@ -168,8 +184,8 @@ class WeeklyCoordinator(BaseAgent):
         last_period_pnl = data.get('last_period_pnl', 0.0)
         decision_history = self._format_decision_history(data.get('decision_history', []))
         
-        # 使用模板
-        prompt = prompts.COORDINATOR_USER_PROMPT_TEMPLATE.format(
+        # 使用模板（根据版本选择）
+        prompt = self.user_prompt_template.format(
             analysis_start_date=analysis_start,
             analysis_end_date=analysis_end,
             forecast_start_date=forecast_start,
@@ -206,7 +222,7 @@ class WeeklyCoordinator(BaseAgent):
         return ", ".join(lines)
     
     def _format_technical_analysis(self, technical: Dict[str, Any]) -> str:
-        """格式化技术分析"""
+        """格式化技术分析（支持v2增强字段）"""
         if not technical:
             return "Technical analysis not available"
         
@@ -217,10 +233,27 @@ class WeeklyCoordinator(BaseAgent):
         
         lines = [
             f"Signal: {overall.get('signal', 'neutral').upper()}",
-            f"Trend: {trend.get('direction', 'unknown')} (strength: {trend.get('strength', 0):.2f})",
-            f"Momentum: {momentum.get('momentum', 'neutral')} (RSI: {momentum.get('rsi', 50):.1f})",
-            f"Volatility: {volatility.get('level', 'unknown')}"
+            f"Trend: {trend.get('direction', 'unknown')} (strength: {trend.get('strength', 0):.2f})"
         ]
+        
+        # V2增强字段
+        if 'adx' in trend:
+            lines.append(f"  ADX: {trend.get('adx', 0):.1f} ({trend.get('adx_strength', 'unknown')} trend)")
+        if 'ma_alignment' in trend:
+            lines.append(f"  MA Alignment: {trend.get('ma_alignment', 'unknown')}")
+        
+        lines.append(f"Momentum: {momentum.get('momentum', 'neutral')} (RSI: {momentum.get('rsi', 50):.1f})")
+        
+        # V2波动率增强
+        vol_line = f"Volatility: {volatility.get('level', 'unknown')}"
+        if 'realized_vol_annual' in volatility:
+            vol_line += f" (RV: {volatility.get('realized_vol_annual', 0):.1f}% annualized)"
+        if 'atr_pct' in volatility:
+            vol_line += f", ATR: {volatility.get('atr_pct', 0):.2f}% of price"
+        if 'expanding' in volatility:
+            expanding = volatility.get('expanding', False)
+            vol_line += f", {'Expanding' if expanding else 'Stable'}"
+        lines.append(vol_line)
         
         return "\n".join(lines)
     
@@ -299,23 +332,9 @@ class WeeklyCoordinator(BaseAgent):
         return ", ".join(lines) if lines else "100% cash"
     
     def _format_decision_history(self, history: List[Dict[str, Any]]) -> str:
-        """格式化决策历史"""
-        if not history:
-            return "No previous decisions"
-        
-        lines = []
-        for decision in history[-4:]:  # 最近4条
-            # 支持新旧两种格式
-            if 'analysis_period' in decision:
-                period = f"{decision['analysis_period']['start']} to {decision['analysis_period']['end']}"
-            else:
-                period = decision.get('week', 'N/A')
-            
-            strategy = decision.get('strategy', decision.get('recommended_strategy', 'N/A'))
-            pnl = decision.get('pnl', 0)
-            lines.append(f"{period}: {strategy} ({pnl:+.2%})")
-        
-        return "\n".join(lines)
+        """格式化决策历史（使用prompts.format_decision_history）"""
+        # 使用prompts模块中的format_decision_history来生成完整的Performance Tracking格式
+        return prompts.format_decision_history(history)
     
     def _call_llm_for_decision(self, user_prompt: str) -> Dict[str, Any]:
         """
@@ -331,14 +350,15 @@ class WeeklyCoordinator(BaseAgent):
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        print("LLM Messages:\n", messages)  # Debug输出 --- IGNORE ---
-        assert False, "Debug Stop"  # Debug断点 --- IGNORE ---
+        logger.info("LLM prompt Messages:\n%s", messages)  # Debug输出 --- IGNORE ---
+        # assert False, "Debug Stop"  # Debug断点 --- IGNORE ---
         
         # 添加few-shot examples（可选）
         # 这里简化，直接调用
         
         try:
             decision = self.llm_client.generate_json(messages)
+            logger.info(f"LLM raw response:\n{json.dumps(decision, indent=2)}")  # Debug: 查看原始响应
             
             # 如果不允许建议仓位，移除该字段
             if not self.can_suggest_positions and 'suggested_positions' in decision:
@@ -352,7 +372,7 @@ class WeeklyCoordinator(BaseAgent):
     
     def _validate_decision(self, decision: Dict[str, Any]) -> bool:
         """
-        验证决策的完整性
+        验证决策的完整性（支持V1和V2格式）
         
         Args:
             decision: 决策字典
@@ -360,30 +380,139 @@ class WeeklyCoordinator(BaseAgent):
         Returns:
             bool: 是否有效
         """
-        required_fields = [
-            'market_state',
-            'reasoning',
-            'recommended_strategy',
-            'confidence',
-            'risk_assessment'
-        ]
-        
-        for field in required_fields:
-            if field not in decision:
-                logger.warning(f"Missing required field: {field}")
+        # V2格式的必填字段和结构
+        if self.prompt_version == 'v2':
+            # 顶层必填字段
+            required_fields_v2 = [
+                'regime_classification',    # 包含primary_regime, confidence等
+                'detailed_reasoning',       # 包含step1-6推理
+                'strategy_recommendation',  # 包含primary_strategy, rationale等
+                'risk_assessment'           # 包含overall_risk, key_risks等
+            ]
+            
+            for field in required_fields_v2:
+                if field not in decision:
+                    logger.warning(f"[V2] Missing required field: {field}")
+                    return False
+            
+            # 检查regime_classification的子字段
+            regime = decision.get('regime_classification', {})
+            if 'primary_regime' not in regime:
+                logger.warning("[V2] Missing regime_classification.primary_regime")
+                return False
+            if 'confidence' not in regime:
+                logger.warning("[V2] Missing regime_classification.confidence")
+                return False
+            
+            # 检查strategy_recommendation的子字段
+            strategy = decision.get('strategy_recommendation', {})
+            if 'primary_strategy' not in strategy:
+                logger.warning("[V2] Missing strategy_recommendation.primary_strategy")
+                return False
+            
+            # 验证策略是否在允许列表中
+            primary_strategy = strategy.get('primary_strategy')
+            if primary_strategy not in self.available_strategies:
+                logger.warning(f"Invalid strategy: {primary_strategy}, valid strategies: {self.available_strategies}")
+                return False
+            
+            # 验证置信度范围
+            confidence = regime.get('confidence', 0)
+            if not (0 <= confidence <= 1):
+                logger.warning(f"Invalid confidence: {confidence}")
                 return False
         
-        # 验证策略是否在允许列表中
-        if decision['recommended_strategy'] not in self.available_strategies:
-            logger.warning(f"Invalid strategy: {decision['recommended_strategy']}, valid strategies: {self.available_strategies}")
-            return False
-        
-        # 验证置信度范围
-        if not (0 <= decision['confidence'] <= 1):
-            logger.warning(f"Invalid confidence: {decision['confidence']}")
-            return False
+        # V1格式的必填字段
+        else:
+            required_fields_v1 = [
+                'market_state',
+                'reasoning',
+                'recommended_strategy',
+                'confidence',
+                'risk_assessment'
+            ]
+            
+            for field in required_fields_v1:
+                if field not in decision:
+                    logger.warning(f"[V1] Missing required field: {field}")
+                    return False
+            
+            # 验证策略是否在允许列表中
+            if decision['recommended_strategy'] not in self.available_strategies:
+                logger.warning(f"Invalid strategy: {decision['recommended_strategy']}, valid strategies: {self.available_strategies}")
+                return False
+            
+            # 验证置信度范围
+            if not (0 <= decision['confidence'] <= 1):
+                logger.warning(f"Invalid confidence: {decision['confidence']}")
+                return False
         
         return True
+    
+    def _normalize_v2_decision(self, decision: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        将V2嵌套格式转换为扁平格式，保持向后兼容
+        
+        Args:
+            decision: V2格式的决策（嵌套结构）
+        
+        Returns:
+            Dict: 扁平格式的决策（兼容V1接口）
+        """
+        regime = decision.get('regime_classification', {})
+        strategy = decision.get('strategy_recommendation', {})
+        risk = decision.get('risk_assessment', {})
+        reasoning = decision.get('detailed_reasoning', {})
+        
+        # 创建扁平格式的决策
+        normalized = {
+            # 核心字段（映射到V1格式）
+            'market_state': regime.get('primary_regime', 'UNKNOWN'),
+            'recommended_strategy': strategy.get('primary_strategy', 'hold'),
+            'confidence': regime.get('confidence', 0.5),
+            'risk_assessment': risk.get('overall_risk', 'Unknown'),
+            
+            # 推理信息（拼接所有步骤）
+            'reasoning': self._format_v2_reasoning(reasoning),
+            
+            # 保留V2原始嵌套结构（供高级功能使用）
+            'regime_classification': regime,
+            'strategy_recommendation': strategy,
+            'detailed_reasoning': reasoning,
+            'risk_assessment_details': risk,
+            
+            # 其他字段
+            'suggested_positions': decision.get('suggested_positions'),
+            'execution_guidelines': decision.get('execution_guidelines'),
+        }
+        
+        return normalized
+    
+    def _format_v2_reasoning(self, detailed_reasoning: Dict[str, Any]) -> str:
+        """
+        将V2详细推理格式化为可读字符串
+        
+        Args:
+            detailed_reasoning: V2的step-by-step推理
+        
+        Returns:
+            str: 格式化的推理文本
+        """
+        parts = []
+        
+        for i in range(1, 7):
+            step_key = f'step{i}_' + [
+                'event_check', 'trend', 'volatility', 
+                'edge_cases', 'anomalies', 'confidence_factors'
+            ][i-1]
+            
+            if step_key in detailed_reasoning:
+                step_value = detailed_reasoning[step_key]
+                if isinstance(step_value, list):
+                    step_value = '; '.join(str(v) for v in step_value)
+                parts.append(f"Step{i}: {step_value}")
+        
+        return ' | '.join(parts)
     
     def _get_fallback_decision(self) -> Dict[str, Any]:
         """

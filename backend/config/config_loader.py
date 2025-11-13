@@ -21,6 +21,7 @@ class SystemConfig(BaseModel):
     initial_capital: float = 100000
     commission: float = 0.001
     slippage: float = 0.001
+    prompt_version: str = "v1"  # Prompt版本：v1=简洁版，v2=增强版（6步regime分类）
 
 
 class AgentConfig(BaseModel):

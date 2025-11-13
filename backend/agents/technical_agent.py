@@ -82,7 +82,7 @@ class TechnicalAgent(BaseAgent):
     
     def _analyze_trend(self, price: float, indicators: Dict[str, Any]) -> Dict[str, Any]:
         """
-        趋势分析
+        趋势分析（V2增强版）
         
         Args:
             price: 当前价格
@@ -94,27 +94,54 @@ class TechnicalAgent(BaseAgent):
         sma_20 = indicators.get('sma_20', 0)
         sma_50 = indicators.get('sma_50', 0)
         sma_200 = indicators.get('sma_200', 0)
+        adx = indicators.get('adx', 0)
         
-        # 判断趋势
-        if price > sma_20 > sma_50 > sma_200:
+        # 判断MA对齐情况
+        ma_aligned_bullish = (price > sma_50 > sma_200)
+        ma_aligned_bearish = (price < sma_50 < sma_200)
+        
+        # 趋势强度判断（基于ADX）
+        # ADX > 25: 强趋势, 20-25: 中等, < 20: 弱趋势/盘整
+        if adx > 25:
+            adx_strength = "strong"
+        elif adx > 20:
+            adx_strength = "moderate"
+        else:
+            adx_strength = "weak"
+        
+        # 综合判断趋势
+        if ma_aligned_bullish and adx > 25:
             trend = "strong_uptrend"
-            strength = 0.9
-        elif price > sma_20 > sma_50:
+            strength = min(0.9, 0.5 + adx / 100)  # ADX越高，强度越大
+        elif ma_aligned_bullish:
             trend = "uptrend"
-            strength = 0.7
-        elif price < sma_20 < sma_50 < sma_200:
+            strength = 0.6 + adx / 200
+        elif ma_aligned_bearish and adx > 25:
             trend = "strong_downtrend"
-            strength = 0.1
-        elif price < sma_20 < sma_50:
+            strength = max(0.1, 0.5 - adx / 100)
+        elif ma_aligned_bearish:
             trend = "downtrend"
-            strength = 0.3
+            strength = 0.4 - adx / 200
         else:
             trend = "neutral"
             strength = 0.5
         
+        # MA alignment字符串（用于prompt）
+        if price > sma_50 > sma_200:
+            ma_alignment = "Price > MA(50) > MA(200)"
+        elif price < sma_50 < sma_200:
+            ma_alignment = "Price < MA(50) < MA(200)"
+        elif price > sma_50 and sma_50 < sma_200:
+            ma_alignment = "Price > MA(50) < MA(200) (mixed)"
+        else:
+            ma_alignment = "MA alignment unclear"
+        
         return {
             "direction": trend,
             "strength": strength,
+            "adx": adx,
+            "adx_strength": adx_strength,
+            "ma_alignment": ma_alignment,
             "above_sma20": price > sma_20,
             "above_sma50": price > sma_50,
             "above_sma200": price > sma_200
@@ -173,7 +200,7 @@ class TechnicalAgent(BaseAgent):
         weekly_stats: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        波动性分析
+        波动性分析（V2增强版）
         
         Args:
             indicators: 技术指标
@@ -183,20 +210,28 @@ class TechnicalAgent(BaseAgent):
             Dict: 波动性分析结果
         """
         atr = indicators.get('atr', 0)
+        atr_pct = indicators.get('atr_pct', 0)
         volatility = weekly_stats.get('volatility', 0)
+        realized_vol_annual = indicators.get('realized_vol_annual', 0)
         
-        # 波动性分级
-        if volatility < 0.01:
+        # 波动性分级（基于realized volatility年化）
+        if realized_vol_annual < 15:
             vol_level = "low"
-        elif volatility < 0.02:
+        elif realized_vol_annual < 25:
             vol_level = "medium"
         else:
             vol_level = "high"
         
+        # 判断波动率是否扩张（简化判断：如果周度波动率 > 2%，认为在扩张）
+        expanding = volatility > 0.02
+        
         return {
             "level": vol_level,
             "atr": atr,
-            "historical_volatility": volatility
+            "atr_pct": atr_pct,
+            "historical_volatility": volatility,
+            "realized_vol_annual": realized_vol_annual,
+            "expanding": expanding
         }
     
     def _analyze_support_resistance(

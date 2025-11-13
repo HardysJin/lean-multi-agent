@@ -9,6 +9,7 @@ system:
   initial_capital: 100000
   commission: 0.001  # 0.1% 手续费
   slippage: 0.001    # 0.1% 滑点
+  prompt_version: v2  # 使用的提示模板版本（v1或v2）
 
 agents:
   technical:

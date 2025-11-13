@@ -60,7 +60,8 @@ class LLMBacktestEngine:
             'can_suggest_positions': self.config.llm.can_suggest_positions,
             'require_approval': self.config.llm.require_approval,
             'available_strategies': self.config.strategies.available,
-            'default_strategy': self.config.strategies.default
+            'default_strategy': self.config.strategies.default,
+            'prompt_version': getattr(self.config.system, 'prompt_version', 'v1')  # 从config读取版本
         }
         self.coordinator = WeeklyCoordinator(config=coordinator_config)
         
@@ -186,6 +187,10 @@ class LLMBacktestEngine:
             
             # Coordinator综合决策（调用LLM）
             logger.info("运行Coordinator (LLM决策)...")
+            # 准备decision history（转换格式以适配prompts.format_decision_history）
+            recent_decisions = self.decisions[-3:] if len(self.decisions) >= 3 else self.decisions
+            formatted_history = self._format_decision_history_for_prompt(recent_decisions)
+            
             coordinator_input = {
                 'analysis_start_date': analysis_start.strftime('%Y-%m-%d'),
                 'analysis_end_date': analysis_end.strftime('%Y-%m-%d'),
@@ -199,7 +204,7 @@ class LLMBacktestEngine:
                 'news_analysis': news_result,
                 'current_portfolio': self._get_portfolio_snapshot(symbol, price_df, decision_date),
                 'last_period_pnl': self._calculate_last_period_pnl(),
-                'decision_history': self.decisions[-3:] if len(self.decisions) >= 3 else self.decisions
+                'decision_history': formatted_history
             }
             
             decision = self.coordinator.analyze(coordinator_input, as_of_date=decision_date)
@@ -358,6 +363,56 @@ class LLMBacktestEngine:
         current = self.portfolio_values[-1]['value']
         previous = self.portfolio_values[-2]['value']
         return current - previous
+    
+    def _format_decision_history_for_prompt(self, decisions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        将回测中的decision格式转换为prompts.format_decision_history期望的格式
+        
+        Args:
+            decisions: 回测中存储的决策列表
+        
+        Returns:
+            转换后的历史决策列表
+        """
+        formatted = []
+        
+        for i, dec in enumerate(decisions):
+            decision = dec.get('decision', {})
+            
+            # 提取期间信息
+            analysis_period = decision.get('analysis_period', {})
+            period_str = f"{analysis_period.get('start', 'N/A')} to {analysis_period.get('end', 'N/A')}"
+            
+            # 提取regime信息（v2格式）
+            regime_info = decision.get('regime_classification', {})
+            predicted_regime = regime_info.get('primary_regime', 'N/A')
+            confidence = regime_info.get('confidence', 0.0)
+            
+            # 提取策略信息（v2格式）
+            strategy_rec = decision.get('strategy_recommendation', {})
+            strategy_used = strategy_rec.get('primary_strategy', decision.get('recommended_strategy', 'N/A'))
+            
+            # 计算outcome（如果有下一个决策，可以计算实际结果）
+            outcome = {}
+            if i < len(decisions) - 1:
+                # 计算本期的实际表现
+                # TODO: 这里需要从portfolio_values中计算实际的market_return和portfolio_return
+                # 暂时使用占位值
+                outcome = {
+                    'market_return': 0.0,  # 需要从价格数据计算
+                    'portfolio_return': 0.0,  # 需要从组合价值计算
+                    'correct_regime': None  # 需要验证regime预测是否正确
+                }
+            
+            formatted.append({
+                'period': period_str,
+                'predicted_regime': predicted_regime,
+                'confidence': confidence,
+                'strategy_used': strategy_used,
+                'outcome': outcome
+            })
+        
+        return formatted
     
     def _execute_decision(
         self,

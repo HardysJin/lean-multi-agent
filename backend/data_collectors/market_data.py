@@ -278,21 +278,46 @@ class MarketDataCollector(BaseCollector):
             # ATR
             df.ta.atr(length=14, append=True)
             
+            # ADX (Average Directional Index) - 趋势强度指标
+            df.ta.adx(length=14, append=True)
+            
+            # 计算realized volatility (annualized)
+            # 使用日收益率计算，252个交易日年化
+            df['returns'] = df['Close'].pct_change()
+            df['realized_vol_20d'] = df['returns'].rolling(window=20).std() * (252 ** 0.5)  # 20日滚动年化波动率
+            
             # 提取最新值
             latest = df.iloc[-1]
             
+            # 安全获取指标值，处理NaN
+            def safe_float(val, default=0.0):
+                try:
+                    result = float(val) if val is not None and not pd.isna(val) else default
+                    return result if not pd.isna(result) else default
+                except (ValueError, TypeError):
+                    return default
+            
+            current_price = float(df['Close'].iloc[-1])
+            atr_value = safe_float(latest.get('ATRr_14', 0))  # pandas_ta generates 'ATRr_14' not 'ATR_14'
+            
             indicators = {
-                "sma_20": float(latest.get('SMA_20', 0)),
-                "sma_50": float(latest.get('SMA_50', 0)),
-                "sma_200": float(latest.get('SMA_200', 0)),
-                "rsi": float(latest.get('RSI_14', 0)),
-                "macd": float(latest.get('MACD_12_26_9', 0)),
-                "macd_signal": float(latest.get('MACDs_12_26_9', 0)),
-                "macd_hist": float(latest.get('MACDh_12_26_9', 0)),
-                "bb_upper": float(latest.get('BBU_20_2.0', 0)),
-                "bb_middle": float(latest.get('BBM_20_2.0', 0)),
-                "bb_lower": float(latest.get('BBL_20_2.0', 0)),
-                "atr": float(latest.get('ATRr_14', 0))
+                "sma_20": safe_float(latest.get('SMA_20', 0)),
+                "sma_50": safe_float(latest.get('SMA_50', 0)),
+                "sma_200": safe_float(latest.get('SMA_200', 0)),
+                "rsi": safe_float(latest.get('RSI_14', 0)),
+                "macd": safe_float(latest.get('MACD_12_26_9', 0)),
+                "macd_signal": safe_float(latest.get('MACDs_12_26_9', 0)),
+                "macd_hist": safe_float(latest.get('MACDh_12_26_9', 0)),
+                "bb_upper": safe_float(latest.get('BBU_20_2.0', 0)),
+                "bb_middle": safe_float(latest.get('BBM_20_2.0', 0)),
+                "bb_lower": safe_float(latest.get('BBL_20_2.0', 0)),
+                "atr": atr_value,
+                # V2增强指标
+                "adx": safe_float(latest.get('ADX_14', 0)),  # 趋势强度
+                "adx_di_plus": safe_float(latest.get('DMP_14', 0)),  # +DI
+                "adx_di_minus": safe_float(latest.get('DMN_14', 0)),  # -DI
+                "realized_vol_annual": safe_float(latest.get('realized_vol_20d', 0)) * 100,  # 转为百分比
+                "atr_pct": (atr_value / current_price) * 100 if current_price > 0 else 0  # ATR占价格百分比
             }
             
         except Exception as e:
