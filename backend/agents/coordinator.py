@@ -45,6 +45,14 @@ class WeeklyCoordinator(BaseAgent):
         # 决策配置
         self.can_suggest_positions = self.config.get('can_suggest_positions', True)
         self.require_approval = self.config.get('require_approval', True)
+        
+        # 从config获取可用策略列表
+        self.available_strategies = self.config.get('available_strategies', 
+            ["grid_trading", "momentum", "mean_reversion", "double_ema_channel", "buy_and_hold", "hold"])
+        self.default_strategy = self.config.get('default_strategy', 'hold')
+        
+        # 生成系统prompt
+        self.system_prompt = prompts.get_coordinator_system_prompt(self.available_strategies)
     
     def analyze(self, data: Dict[str, Any], as_of_date: Optional[datetime] = None) -> Dict[str, Any]:
         """
@@ -320,9 +328,11 @@ class WeeklyCoordinator(BaseAgent):
             Dict: 决策JSON
         """
         messages = [
-            {"role": "system", "content": prompts.COORDINATOR_SYSTEM_PROMPT},
+            {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": user_prompt}
         ]
+        print("LLM Messages:\n", messages)  # Debug输出 --- IGNORE ---
+        assert False, "Debug Stop"  # Debug断点 --- IGNORE ---
         
         # 添加few-shot examples（可选）
         # 这里简化，直接调用
@@ -364,9 +374,8 @@ class WeeklyCoordinator(BaseAgent):
                 return False
         
         # 验证策略是否在允许列表中
-        valid_strategies = ['grid_trading', 'momentum', 'mean_reversion', 'hold']
-        if decision['recommended_strategy'] not in valid_strategies:
-            logger.warning(f"Invalid strategy: {decision['recommended_strategy']}")
+        if decision['recommended_strategy'] not in self.available_strategies:
+            logger.warning(f"Invalid strategy: {decision['recommended_strategy']}, valid strategies: {self.available_strategies}")
             return False
         
         # 验证置信度范围
@@ -388,7 +397,7 @@ class WeeklyCoordinator(BaseAgent):
         return {
             "market_state": "uncertain",
             "reasoning": "Unable to generate LLM decision. Using conservative fallback.",
-            "recommended_strategy": "hold",
+            "recommended_strategy": self.default_strategy,
             "confidence": 0.3,
             "risk_assessment": "High uncertainty - preserve capital",
             "suggested_positions": {"cash": 1.0} if self.can_suggest_positions else None,

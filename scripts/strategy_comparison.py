@@ -165,6 +165,7 @@ class StrategyComparison:
         avg_cost = 0.0  # 持仓均价
         total_cost = 0.0  # 总成本
         cumulative_pnl = 0.0  # 累计已实现盈亏
+        initial_capital = self.initial_capital  # 初始资金
         
         trade_records = []
         
@@ -222,6 +223,12 @@ class StrategyComparison:
             price_str = f"${price:.2f}"
             shares_str = f"{abs(shares)}"  # 显示绝对值
             
+            # 获取策略来源
+            strategy_name = t.get('strategy', 'N/A')
+            
+            # 获取交易后的现金余额
+            cash_balance = float(t.get('cash', 0))
+            
             # 金额列：买入显示成本，卖出显示收益
             if action == 'buy':
                 amount_str = f"${cost:.2f}"
@@ -230,27 +237,35 @@ class StrategyComparison:
                 amount_str = f"${proceeds_val:.2f}"
             position_str = f"{position}"
             avg_cost_str = f"${avg_cost:.2f}" if position > 0 else "-"
+            cash_str = f"${cash_balance:,.2f}"
             
             # 交易盈亏（只有卖出才显示）
             if action == 'sell' and trade_pnl != 0:
                 trade_pnl_str = f"${trade_pnl:+,.2f}"
                 cumulative_pnl_str = f"${cumulative_pnl:+,.2f}"
+                # 计算累计收益百分比
+                cumulative_pnl_pct = (cumulative_pnl / initial_capital) * 100
+                cumulative_pnl_pct_str = f"{cumulative_pnl_pct:+.2f}%"
             else:
                 trade_pnl_str = "-"
                 cumulative_pnl_str = "-" if cumulative_pnl == 0 else f"${cumulative_pnl:+,.2f}"
+                cumulative_pnl_pct_str = "-" if cumulative_pnl == 0 else f"{(cumulative_pnl / initial_capital) * 100:+.2f}%"
             
             trade_records.append([
                 date_str,
                 self.symbol,
                 action_cn,
                 trade_type,
+                strategy_name,
                 shares_str,
                 price_str,
                 amount_str,
                 position_str,
                 avg_cost_str,
+                cash_str,
                 trade_pnl_str,
-                cumulative_pnl_str
+                cumulative_pnl_str,
+                cumulative_pnl_pct_str
             ])
 
         # 如果有持仓，添加当前持仓状态（浮动盈亏）
@@ -281,20 +296,29 @@ class StrategyComparison:
                     # 计算浮动盈亏
                     unrealized_pnl = (last_price - avg_cost) * position
                     unrealized_pnl_total = cumulative_pnl + unrealized_pnl
+                    unrealized_pnl_total_pct = (unrealized_pnl_total / initial_capital) * 100
+                    
+                    # 获取最后一笔交易的现金余额
+                    last_cash = 0
+                    if llm_trades_raw:
+                        last_cash = float(llm_trades_raw[-1].get('cash', 0))
                     
                     # 添加当前持仓状态行
                     trade_records.append([
-                        "-",
+                        self.end_date.date(),
                         self.symbol,
                         "持仓",
                         "持仓中",
+                        "-",
                         f"{position}",
-                        f"${last_price:.2f}(当前)",
+                        f"(当前)${last_price:.2f}",
                         "-",
                         f"{position}",
                         f"${avg_cost:.2f}",
-                        f"${unrealized_pnl:+,.2f}(浮)",
-                        f"${unrealized_pnl_total:+,.2f}(含浮)"
+                        f"${last_cash:,.2f}",
+                        f"(浮)${unrealized_pnl:+,.2f}",
+                        f"(含浮)${unrealized_pnl_total:+,.2f}",
+                        f"(含浮){unrealized_pnl_total_pct:+.2f}%"
                     ])
             except Exception as e:
                 logger.warning(f"获取最新价格失败: {e}")
@@ -307,7 +331,7 @@ class StrategyComparison:
         for rec in trade_records:
             action = rec[2]  # 操作列
             if action == "卖出":
-                pnl_str = rec[9]  # 交易盈亏列
+                pnl_str = rec[11]  # 交易盈亏列 (索引11: 增加了剩余现金列)
                 if pnl_str != "-" and "(浮)" not in pnl_str:
                     try:
                         # 提取数值，去除 $ 和 ,
@@ -324,12 +348,12 @@ class StrategyComparison:
         else:
             llm_profit_factor = float('inf') if llm_win_sum > 0 else 0.0
 
-        # 打印详细交易记录（最近10笔）
+        # 打印详细交易记录
         if trade_records:
-            print(f"\n【交易明细】(最近{min(10, len(trade_records))}/{len(trade_records)}笔)")
-            headers = ["时间", "股票", "操作", "类型", "数量", "价格", "金额", "持仓", "持仓均价", "交易盈亏", "累计收益"]
-            print(tabulate(trade_records[-10:], headers=headers, tablefmt='simple',
-                         colalign=('left', 'left', 'center', 'center', 'right', 'right', 'right', 'right', 'right', 'right', 'right')))
+            print(f"\n【交易明细】(最近{len(trade_records)}笔)")
+            headers = ["时间", "股票", "操作", "类型", "策略", "数量", "价格", "金额", "持仓", "持仓均价", "剩余现金", "交易盈亏", "累计收益", "累计收益%"]
+            print(tabulate(trade_records, headers=headers, tablefmt='simple',
+                         colalign=('left', 'left', 'center', 'center', 'left', 'right', 'right', 'right', 'right', 'right', 'right', 'right', 'right', 'right')))
 
 
         # 处理 Buy & Hold 回测（simple_backtest 返回百分比字段）
@@ -481,8 +505,70 @@ class StrategyComparison:
             print(f"  ✓ LLM策略回撤控制更好 (少回撤 {-comparison['difference']['drawdown_diff_pct']:.2f}%)")
 
         print("\n")
+        
+        # 策略表现分析
+        self._print_strategy_performance_analysis(llm_results)
 
         return comparison
+    
+    def _print_strategy_performance_analysis(self, results: Dict[str, Any]):
+        """打印策略表现分析"""
+        print("=" * 80)
+        print("【策略表现分析】")
+        print("=" * 80)
+        
+        try:
+            from backend.utils.strategy_analyzer import StrategyPerformanceAnalyzer
+            
+            trades = results.get('trades', [])
+            if not trades:
+                print("没有交易记录")
+                return
+            
+            # 检查是否有strategy字段
+            trades_with_strategy = [t for t in trades if 'strategy' in t]
+            if not trades_with_strategy:
+                print("交易记录中没有策略信息")
+                return
+            
+            analyzer = StrategyPerformanceAnalyzer(trades)
+            analysis = analyzer.analyze_by_strategy()
+            
+            if not analysis:
+                print("没有可分析的交易数据（需要完成的买卖对）")
+                return
+            
+            # 按总盈亏排序
+            sorted_strategies = sorted(
+                analysis.items(),
+                key=lambda x: x[1]['total_profit'],
+                reverse=True
+            )
+            
+            for strategy_name, metrics in sorted_strategies:
+                print(f"\n📊 策略: {strategy_name.upper()}")
+                print("-" * 80)
+                print(f"  交易次数: {metrics['total_trades']}")
+                print(f"  胜率: {metrics['win_rate']:.2%} ({metrics['winning_trades']}胜 / {metrics['losing_trades']}败)")
+                print(f"  总盈亏: ${metrics['total_profit']:,.2f}")
+                print(f"  平均盈亏: ${metrics['avg_profit']:,.2f}")
+                print(f"  盈亏比: {metrics['profit_loss_ratio']:.2f}")
+                print(f"  最大盈利: ${metrics['max_profit']:,.2f}")
+                print(f"  最大亏损: ${metrics['max_loss']:,.2f}")
+            
+            # 总结
+            print("\n" + "-" * 80)
+            total_profit = sum(m['total_profit'] for m in analysis.values())
+            total_trades = sum(m['total_trades'] for m in analysis.values())
+            best_strategy = sorted_strategies[0]
+            
+            print(f"总交易次数: {total_trades}")
+            print(f"总盈亏: ${total_profit:,.2f}")
+            print(f"最佳策略: {best_strategy[0].upper()} (${best_strategy[1]['total_profit']:,.2f})")
+            print("=" * 80)
+            
+        except Exception as e:
+            logger.warning(f"策略表现分析失败: {e}")
     
     def run(self) -> Dict[str, Any]:
         """运行完整对比测试"""

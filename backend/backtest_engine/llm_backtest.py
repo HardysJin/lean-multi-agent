@@ -11,6 +11,7 @@ LLM Multi-Agent Backtest Engine
 """
 
 from datetime import datetime, timedelta
+from math import ceil
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List
@@ -53,7 +54,15 @@ class LLMBacktestEngine:
         self.technical_agent = TechnicalAgent()
         self.sentiment_agent = SentimentAgent()
         self.news_agent = NewsAgent()
-        self.coordinator = WeeklyCoordinator()
+        
+        # 准备coordinator配置
+        coordinator_config = {
+            'can_suggest_positions': self.config.llm.can_suggest_positions,
+            'require_approval': self.config.llm.require_approval,
+            'available_strategies': self.config.strategies.available,
+            'default_strategy': self.config.strategies.default
+        }
+        self.coordinator = WeeklyCoordinator(config=coordinator_config)
         
         # 初始化数据收集器
         logger.info("初始化数据收集器...")
@@ -70,6 +79,9 @@ class LLMBacktestEngine:
         self.trades = []
         self.decisions = []
         self.portfolio_values = []
+        
+        # 策略实例缓存 {strategy_name: strategy_instance}
+        self.strategy_instances = {}
         
     def run(
         self,
@@ -356,7 +368,7 @@ class LLMBacktestEngine:
     ) -> Dict[str, Any]:
         """执行决策 - 调用对应策略的execute方法"""
         
-        strategy_name = decision.get('recommended_strategy', '').lower()
+        strategy_name = decision.get('recommended_strategy', 'unknown').lower()
         current_price = self._get_price_at_date(price_df, decision_date)
         
         if current_price is None:
@@ -366,12 +378,16 @@ class LLMBacktestEngine:
         # 导入策略工厂
         from backend.strategies.strategy_factory import StrategyFactory
         
-        # 获取策略实例
-        try:
-            strategy = StrategyFactory.create_strategy(strategy_name)
-        except ValueError as e:
-            logger.error(f"无法创建策略 {strategy_name}: {e}")
-            return {'action': 'none', 'reason': 'invalid_strategy'}
+        # 获取或创建策略实例（复用同一个实例以保持状态）
+        if strategy_name not in self.strategy_instances:
+            try:
+                self.strategy_instances[strategy_name] = StrategyFactory.create_strategy(strategy_name)
+                logger.info(f"创建新策略实例: {strategy_name}")
+            except ValueError as e:
+                logger.error(f"无法创建策略 {strategy_name}: {e}")
+                return {'action': 'none', 'reason': 'invalid_strategy'}
+        
+        strategy = self.strategy_instances[strategy_name]
         
         # 准备策略所需的市场数据
         # 获取策略所需的最小数据点数
@@ -425,7 +441,8 @@ class LLMBacktestEngine:
             symbol=symbol,
             strategy_result=strategy_result,
             current_price=current_price,
-            decision_date=decision_date
+            decision_date=decision_date,
+            strategy_name=strategy_name  # 传递策略名称
         )
     
     def _execute_trade_from_strategy_result(
@@ -433,85 +450,282 @@ class LLMBacktestEngine:
         symbol: str,
         strategy_result: Dict[str, Any],
         current_price: float,
-        decision_date: datetime
+        decision_date: datetime,
+        strategy_name: str = None
     ) -> Dict[str, Any]:
-        """根据信号执行交易"""
+        """
+        根据策略信号执行交易
         
+        Args:
+            symbol: 交易标的
+            strategy_result: 策略返回的信号
+            current_price: 当前价格
+            decision_date: 决策日期
+            strategy_name: 策略名称
+        
+        Returns:
+            执行结果字典
+        """
+        action = strategy_result.get('action', 'hold').lower()
         current_position = self.positions.get(symbol, 0)
         
+        # 初始化执行记录
         execution = {
             'date': decision_date.strftime('%Y-%m-%d'),
             'price': current_price,
-            'action': 'none',
+            'action': 'hold',
             'shares': 0,
-            'cost': 0
+            'cost': 0,
+            'strategy': strategy_name or 'unknown'
         }
         
-        if strategy_result.get('action') == 'buy':  # 买入信号
-            # 单股最大持仓不超过总资金的70%
-            # 买入（使用n%资金）
-            total_assets = self.cash + current_position * current_price
-            current_position_ratio = current_position * current_price / total_assets if total_assets > 0 else 0
-            if current_position_ratio < 0.7:
-                # n = 0.5 if strategy_result.get('confidence', 0) >= 0.85 else 0.3
-                available_cash = total_assets * 0.7 - current_position * current_price
-                shares = int(available_cash / (current_price * (1 + self.commission)))
-
-                if shares > 0:
-                    cost = shares * current_price * (1 + self.commission)
-                    self.cash -= cost
-                    self.positions[symbol] = self.positions.get(symbol, 0) + shares
-                    
-                    # 更新持仓成本
-                    self.position_costs[symbol] = self.position_costs.get(symbol, 0) + cost
-                    
-                    execution['action'] = 'buy'
-                    execution['shares'] = shares
-                    execution['cost'] = cost
-                    
-                    self.trades.append(execution.copy())
-                    logger.info(f"✓ 买入 {shares} 股 @ ${current_price:.2f}, 成本: ${cost:.2f}")
-            else:
-                logger.info(f"已持仓 {current_position} 股，跳过买入")
-                execution['action'] = 'hold'
-
-        elif strategy_result.get('action') == 'sell':  # 卖出信号
-            if current_position > 0:
-                confidence = strategy_result.get('confidence', 0)
-                # 根据信心调整卖出比例（信心越高，卖出越多）
-                shares = int(current_position * confidence)
-                proceeds = shares * current_price * (1 - self.commission)
-                
-                # 计算这笔卖出的成本（按比例分摊）
-                total_cost = self.position_costs.get(symbol, 0)
-                avg_cost = total_cost / current_position if current_position > 0 else 0
-                sold_cost = shares * avg_cost
-                profit = proceeds - sold_cost
-                
-                self.cash += proceeds
-                self.positions[symbol] = self.positions.get(symbol, 0) - shares
-                assert self.positions[symbol] >= 0, "持仓数量不能为负, 暂不支持卖空"
-                
-                # 更新持仓成本
-                self.position_costs[symbol] = self.position_costs.get(symbol, 0) - sold_cost
-                
-                execution['action'] = 'sell'
-                execution['shares'] = -shares
-                execution['cost'] = -proceeds  # 保持原有逻辑
-                execution['proceeds'] = proceeds
-                execution['profit'] = profit  # 新增盈亏字段
-                
-                self.trades.append(execution.copy())
-                logger.info(f"✓ 卖出 {shares} 股 @ ${current_price:.2f}, 收入: ${proceeds:.2f}, 盈亏: ${profit:+,.2f}")
-            else:
-                logger.info("无持仓，跳过卖出")
-                execution['action'] = 'hold'
-        
-        else:  # 持有信号
-            execution['action'] = 'hold'
+        # 根据信号类型执行交易
+        if action == 'buy':
+            self._execute_buy(symbol, strategy_result, current_price, current_position, execution, decision_date)
+        elif action == 'sell':
+            self._execute_sell(symbol, strategy_result, current_price, current_position, execution)
+        else:
             logger.info("策略信号: 持有")
         
+        # 通知策略更新其内部状态（如果策略有execute_trade方法）
+        if execution['action'] in ['buy', 'sell'] and strategy_name in self.strategy_instances:
+            strategy = self.strategy_instances[strategy_name]
+            if hasattr(strategy, 'execute_trade'):
+                strategy.execute_trade(execution['action'], current_price)
+        
         return execution
+    
+    def _execute_buy(
+        self,
+        symbol: str,
+        strategy_result: Dict[str, Any],
+        current_price: float,
+        current_position: int,
+        execution: Dict[str, Any],
+        current_date: datetime = None
+    ) -> None:
+        """
+        执行买入操作
+        
+        Args:
+            symbol: 交易标的
+            strategy_result: 策略信号
+            current_price: 当前价格
+            current_position: 当前持仓
+            execution: 执行记录（会被修改）
+            current_date: 当前日期（用于获取VIX）
+        """
+        # 检查现金充足性
+        if self.cash <= 0:
+            logger.info(f"现金不足 (${self.cash:.2f})，跳过买入")
+            return
+        
+        # 风控参数（基础值）
+        BASE_MAX_POSITION_PERCENT = 0.5  # 单股基础最大持仓比例
+        
+        # 检查市场特殊情况，动态调整风控限制
+        max_position_percent, is_exceptional = self._get_dynamic_position_limit(
+            symbol, 
+            strategy_result,
+            BASE_MAX_POSITION_PERCENT,
+            current_date
+        )
+        
+        # 计算当前资产和持仓比例
+        total_assets = self.cash + current_position * current_price
+        current_position_value = current_position * current_price
+        current_position_ratio = current_position_value / total_assets if total_assets > 0 else 0
+        
+        # 检查是否超过动态持仓限制
+        if current_position_ratio >= max_position_percent:
+            if is_exceptional:
+                logger.info(
+                    f"持仓比例 {current_position_ratio:.1%} 已达特殊情况上限 {max_position_percent:.1%}，"
+                    f"跳过买入"
+                )
+            else:
+                logger.info(f"持仓比例已达上限 {current_position_ratio:.1%}，跳过买入")
+            return
+        
+        # 根据策略confidence计算买入比例
+        # confidence 控制买入力度：0.5 = 买入到一半的max_position_percent
+        # max_position_percent 是动态上限：正常50%，特殊情况可到60-90%
+        confidence = strategy_result.get('confidence', 0.5)
+        buy_percent = confidence * max_position_percent
+        
+        # 计算目标持仓价值和可用现金
+        target_position_value = total_assets * buy_percent
+        available_for_purchase = target_position_value - current_position_value
+        available_cash = min(available_for_purchase, self.cash) if available_for_purchase > 0 else 0
+        
+        if available_cash <= 0:
+            logger.info("可用资金不足，跳过买入")
+            return
+        
+        # 计算买入股数
+        shares = int(available_cash / (current_price * (1 + self.commission)))
+        
+        if shares <= 0:
+            logger.info(f"可用资金不足以买入1股 (${available_cash:.2f})，跳过买入")
+            return
+        
+        # 计算实际成本
+        cost = shares * current_price * (1 + self.commission)
+        
+        # 最终现金充足性检查
+        if cost > self.cash:
+            logger.info(f"现金不足 (需要${cost:.2f}, 可用${self.cash:.2f})，跳过买入")
+            return
+        
+        # 执行买入
+        self.cash -= cost
+        self.positions[symbol] = self.positions.get(symbol, 0) + shares
+        self.position_costs[symbol] = self.position_costs.get(symbol, 0) + cost
+        
+        # 更新执行记录
+        execution['action'] = 'buy'
+        execution['shares'] = shares
+        execution['cost'] = cost
+        execution['cash'] = self.cash
+        
+        # 记录交易
+        self.trades.append(execution.copy())
+        logger.info(f"✓ 买入 {shares} 股 @ ${current_price:.2f}, 成本: ${cost:.2f}")
+    
+    def _get_dynamic_position_limit(
+        self,
+        symbol: str,
+        strategy_result: Dict[str, Any],
+        base_limit: float,
+        current_date: datetime = None
+    ) -> tuple[float, bool]:
+        """
+        根据市场情况动态调整持仓上限
+        
+        Args:
+            symbol: 交易标的
+            strategy_result: 策略信号（可能包含市场状态信息）
+            base_limit: 基础持仓上限
+            current_date: 当前日期（用于获取VIX数据）
+        
+        Returns:
+            (调整后的上限, 是否为例外情况)
+        """
+        # 获取最新的市场数据（如果有）
+        if not self.portfolio_values:
+            return base_limit, False
+        
+        # 直接从市场数据获取VIX
+        vix_level = None
+        
+        if current_date:
+            try:
+                # 从market_collector获取VIX数据
+                # 获取当前日期前后一周的数据以确保有数据
+                vix_start = current_date - timedelta(days=7)
+                vix_end = current_date
+                
+                vix_data = self.market_collector.collect(
+                    start_date=vix_start,
+                    end_date=vix_end
+                )
+                
+                if '^VIX' in vix_data and vix_data['^VIX']['ohlcv']:
+                    # 获取最新的VIX收盘价
+                    latest_vix = vix_data['^VIX']['ohlcv'][-1]
+                    vix_level = latest_vix['Close']
+                    
+            except Exception as e:
+                logger.debug(f"获取VIX数据失败: {e}")
+                vix_level = None
+        
+        # 检查策略信号中是否有特殊标记
+        is_crash_protection = strategy_result.get('crash_protection', False)
+        is_extreme_opportunity = strategy_result.get('extreme_opportunity', False)
+        
+        # 规则1：VIX极端高位（恐慌性抛售）- 允许更大仓位抄底
+        if vix_level and vix_level > 40:  # VIX > 40 表示极端恐慌
+            adjusted_limit = min(base_limit + 0.2, 0.9)  # 最多放宽到90%
+            logger.info(f"⚠️  检测到VIX极端高位 ({vix_level:.1f})，放宽持仓上限至 {adjusted_limit:.1%}")
+            return adjusted_limit, True
+        
+        elif vix_level and vix_level > 30:  # VIX > 30 表示高度恐慌
+            adjusted_limit = min(base_limit + 0.1, 0.8)  # 放宽到80%
+            logger.info(f"⚠️  检测到VIX高位 ({vix_level:.1f})，放宽持仓上限至 {adjusted_limit:.1%}")
+            return adjusted_limit, True
+        
+        # 规则2：策略明确标记为崩盘保护或极端机会
+        if is_crash_protection or is_extreme_opportunity:
+            adjusted_limit = min(base_limit + 0.15, 0.85)
+            reason = "崩盘保护" if is_crash_protection else "极端机会"
+            logger.info(f"⚠️  策略标记为{reason}，放宽持仓上限至 {adjusted_limit:.1%}")
+            return adjusted_limit, True
+        
+        # 规则3：策略confidence极高（>0.85）且持仓比例较低
+        confidence = strategy_result.get('confidence', 0.5)
+        if confidence > 0.85:
+            adjusted_limit = min(base_limit + 0.1, 0.8)
+            logger.info(f"📈 策略信心极高 ({confidence:.2f})，放宽持仓上限至 {adjusted_limit:.1%}")
+            return adjusted_limit, True
+        
+        # 默认：使用基础限制
+        return base_limit, False
+    
+    def _execute_sell(
+        self,
+        symbol: str,
+        strategy_result: Dict[str, Any],
+        current_price: float,
+        current_position: int,
+        execution: Dict[str, Any]
+    ) -> None:
+        """
+        执行卖出操作
+        
+        Args:
+            symbol: 交易标的
+            strategy_result: 策略信号
+            current_price: 当前价格
+            current_position: 当前持仓
+            execution: 执行记录（会被修改）
+        """
+        # 检查是否有持仓
+        if current_position <= 0:
+            logger.info("无持仓，跳过卖出")
+            return
+        
+        # 根据confidence决定卖出数量
+        confidence = strategy_result.get('confidence', 1.0)
+        shares = ceil(current_position * confidence)
+        shares = min(shares, current_position)  # 确保不超过持仓
+        
+        # 计算收入和盈亏
+        proceeds = shares * current_price * (1 - self.commission)
+        
+        # 计算平均成本和盈亏
+        total_cost = self.position_costs.get(symbol, 0)
+        avg_cost = total_cost / current_position if current_position > 0 else 0
+        sold_cost = shares * avg_cost
+        profit = proceeds - sold_cost
+        
+        # 执行卖出
+        self.cash += proceeds
+        self.positions[symbol] = current_position - shares
+        self.position_costs[symbol] = total_cost - sold_cost
+        
+        assert self.positions[symbol] >= 0, "持仓数量不能为负, 暂不支持卖空"
+        
+        # 更新执行记录
+        execution['action'] = 'sell'
+        execution['shares'] = -shares
+        execution['cost'] = -proceeds
+        execution['proceeds'] = proceeds
+        execution['profit'] = profit
+        execution['cash'] = self.cash
+        
+        # 记录交易
+        self.trades.append(execution.copy())
+        logger.info(f"✓ 卖出 {shares} 股 @ ${current_price:.2f}, 收入: ${proceeds:.2f}, 盈亏: ${profit:+,.2f}")
     
     def _get_price_at_date(self, price_df: pd.DataFrame, date: datetime) -> float:
         """获取指定日期的价格（收盘价）"""
@@ -613,7 +827,28 @@ class LLMBacktestEngine:
         logger.info(f"  基准收益: {bh_return*100:.2f}%")
         logger.info(f"  Alpha: {(total_return - bh_return)*100:.2f}%")
         
+        # 策略表现分析
+        # self._print_strategy_performance(results)
+        
         return results
+    
+    def _print_strategy_performance(self, results: Dict[str, Any]):
+        """打印策略表现分析"""
+        try:
+            from backend.utils.strategy_analyzer import StrategyPerformanceAnalyzer
+            
+            trades = results.get('trades', [])
+            if not trades:
+                return
+            
+            analyzer = StrategyPerformanceAnalyzer(trades)
+            report = analyzer.get_summary_report()
+            
+            logger.info("")
+            logger.info(report)
+            
+        except Exception as e:
+            logger.warning(f"策略表现分析失败: {e}")
     
     def _calculate_max_drawdown(self, values: List[float]) -> float:
         """计算最大回撤"""

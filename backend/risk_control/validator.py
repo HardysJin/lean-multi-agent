@@ -3,7 +3,7 @@ Decision Validator - validates trading decisions before execution
 决策验证器
 """
 
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -15,6 +15,17 @@ class DecisionValidator:
     
     验证决策的完整性和合理性
     """
+    
+    def __init__(self, valid_strategies: Optional[List[str]] = None):
+        """
+        初始化验证器
+        
+        Args:
+            valid_strategies: 有效策略列表，如果为None则使用默认列表
+        """
+        if valid_strategies is None:
+            valid_strategies = ['grid_trading', 'momentum', 'mean_reversion', 'double_ema_channel', 'buy_and_hold', 'hold']
+        self.valid_strategies = valid_strategies
     
     def validate(self, decision: Dict[str, Any]) -> Tuple[bool, List[str]]:
         """
@@ -42,10 +53,9 @@ class DecisionValidator:
                 errors.append(f"Missing required field: {field}")
         
         # 2. 验证策略
-        valid_strategies = ['grid_trading', 'momentum', 'mean_reversion', 'hold']
         strategy = decision.get('recommended_strategy')
-        if strategy and strategy not in valid_strategies:
-            errors.append(f"Invalid strategy: {strategy}")
+        if strategy and strategy not in self.valid_strategies:
+            errors.append(f"Invalid strategy: {strategy}, valid strategies: {self.valid_strategies}")
         
         # 3. 验证置信度
         confidence = decision.get('confidence')

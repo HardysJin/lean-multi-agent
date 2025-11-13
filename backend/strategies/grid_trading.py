@@ -6,6 +6,7 @@
 
 from typing import Dict, Any, List
 import pandas as pd
+from backend.config.config_loader import get_config
 import numpy as np
 
 
@@ -33,7 +34,6 @@ class GridTradingStrategy:
         grid_num: int = 10,
         initial_grids: int = 5,
         auto_adjust: bool = True,  # 自动根据历史数据调整网格范围
-        lookback_days: int = 30    # 回看天数用于自动调整
     ):
         """
         初始化网格交易策略
@@ -46,12 +46,13 @@ class GridTradingStrategy:
             auto_adjust: 是否自动调整网格范围
             lookback_days: 用于自动调整的回看天数
         """
+        self.config = get_config()
         self.price_lower = price_lower
         self.price_upper = price_upper
         self.grid_num = grid_num
         self.initial_grids = initial_grids
         self.auto_adjust = auto_adjust
-        self.lookback_days = lookback_days
+        self.lookback_days = 30 # self.config.system.lookback_days
         
         # 网格配置
         self.grids = []  # 网格价格点位
@@ -128,37 +129,125 @@ class GridTradingStrategy:
         current_price = latest['Close']
         current_grid = self._find_grid_level(current_price)
         
-        # 价格超出网格范围
+        # 价格超出网格范围的处理
+        # 价格大幅低于网格下限 - 分情况处理，避免盲目抄底
         if current_price < self.price_lower * 0.95:
-            return {
-                'action': 'hold',
-                'reason': f'价格${current_price:.2f}低于网格下限${self.price_lower:.2f}，等待回归',
-                'confidence': 0.0,
-                'grid_info': {
-                    'current_grid': current_grid,
-                    'total_grids': self.grid_num,
-                    'grid_range': f'${self.price_lower:.2f} - ${self.price_upper:.2f}'
+            drop_ratio = (self.price_lower - current_price) / self.price_lower
+            
+            # 策略1：如果已有持仓，谨慎加仓（防止继续下跌越套越深）
+            if self.total_position > 0:
+                # 已有持仓时，降低买入信心
+                # 跌破5%: conf=0.4, 跌破10%: conf=0.5, 跌破20%: conf=0.6
+                confidence = min(0.4 + drop_ratio * 0.5, 0.6)
+                
+                return {
+                    'action': 'buy',
+                    'reason': f'持仓中谨慎加仓：价格${current_price:.2f}低于网格下限${self.price_lower:.2f}（-{drop_ratio:.1%}），小幅分批建仓',
+                    'confidence': confidence,
+                    'price': current_price,
+                    'grid_info': {
+                        'current_grid': current_grid,
+                        'total_grids': self.grid_num,
+                        'grid_range': f'${self.price_lower:.2f} - ${self.price_upper:.2f}',
+                        'drop_from_lower': f'{drop_ratio:.1%}',
+                        'existing_position': self.total_position
+                    }
                 }
-            }
+            
+            # 策略2：空仓时，等待进一步确认或极端超跌
+            else:
+                # 跌破幅度不大（5-15%）：观望等待
+                if drop_ratio < 0.15:
+                    return {
+                        'action': 'hold',
+                        'reason': f'价格${current_price:.2f}低于网格下限${self.price_lower:.2f}（-{drop_ratio:.1%}），但跌幅未达极端水平，观望等待',
+                        'confidence': 0.0,
+                        'grid_info': {
+                            'current_grid': current_grid,
+                            'total_grids': self.grid_num,
+                            'grid_range': f'${self.price_lower:.2f} - ${self.price_upper:.2f}',
+                            'drop_from_lower': f'{drop_ratio:.1%}'
+                        }
+                    }
+                
+                # 跌破幅度较大（15-30%）：适度抄底
+                elif drop_ratio < 0.30:
+                    confidence = 0.5 + (drop_ratio - 0.15) * 0.67  # 0.5 to 0.6
+                    return {
+                        'action': 'buy',
+                        'reason': f'适度抄底：价格${current_price:.2f}低于网格下限${self.price_lower:.2f}（-{drop_ratio:.1%}），分批建仓',
+                        'confidence': confidence,
+                        'price': current_price,
+                        'grid_info': {
+                            'current_grid': current_grid,
+                            'total_grids': self.grid_num,
+                            'grid_range': f'${self.price_lower:.2f} - ${self.price_upper:.2f}',
+                            'drop_from_lower': f'{drop_ratio:.1%}'
+                        }
+                    }
+                
+                # 跌破幅度极大（>30%）：标记为极端机会，但仍保持谨慎
+                else:
+                    confidence = min(0.65 + (drop_ratio - 0.30) * 0.5, 0.8)  # 0.65 to 0.8
+                    return {
+                        'action': 'buy',
+                        'reason': f'极端超跌抄底：价格${current_price:.2f}低于网格下限${self.price_lower:.2f}（-{drop_ratio:.1%}），可能是底部',
+                        'confidence': confidence,
+                        'extreme_opportunity': True,  # 仅在极端情况下标记
+                        'price': current_price,
+                        'grid_info': {
+                            'current_grid': current_grid,
+                            'total_grids': self.grid_num,
+                            'grid_range': f'${self.price_lower:.2f} - ${self.price_upper:.2f}',
+                            'drop_from_lower': f'{drop_ratio:.1%}'
+                        }
+                    }
         
+        # 价格大幅高于网格上限 - 卖出获利
         if current_price > self.price_upper * 1.05:
-            return {
-                'action': 'hold',
-                'reason': f'价格${current_price:.2f}高于网格上限${self.price_upper:.2f}，等待回落',
-                'confidence': 0.0,
-                'grid_info': {
-                    'current_grid': current_grid,
-                    'total_grids': self.grid_num,
-                    'grid_range': f'${self.price_lower:.2f} - ${self.price_upper:.2f}'
+            # 如果有持仓，卖出获利；如果没持仓，等待回落
+            if self.total_position > 0:
+                # 计算超出幅度
+                exceed_ratio = (current_price - self.price_upper) / self.price_upper
+                confidence = min(0.8 + exceed_ratio, 0.95)
+                
+                return {
+                    'action': 'sell',
+                    'reason': f'价格${current_price:.2f}高于网格上限${self.price_upper:.2f}（+{exceed_ratio:.1%}），获利了结',
+                    'confidence': confidence,
+                    'price': current_price,
+                    'grid_info': {
+                        'current_grid': current_grid,
+                        'total_grids': self.grid_num,
+                        'grid_range': f'${self.price_lower:.2f} - ${self.price_upper:.2f}',
+                        'exceed_upper': f'{exceed_ratio:.1%}'
+                    }
                 }
-            }
+            else:
+                return {
+                    'action': 'hold',
+                    'reason': f'价格${current_price:.2f}高于网格上限${self.price_upper:.2f}，空仓等待回落',
+                    'confidence': 0.0,
+                    'grid_info': {
+                        'current_grid': current_grid,
+                        'total_grids': self.grid_num,
+                        'grid_range': f'${self.price_lower:.2f} - ${self.price_upper:.2f}'
+                    }
+                }
         
         # 初始建仓：空仓时在中间档位开始建仓
         if self.total_position == 0 and current_grid <= self.grid_num // 2:
+            # 初始建仓信心：位置越低，信心越高
+            # 网格0: 0.9, 网格1: 0.82, 网格2: 0.74, 网格5: 0.5
+            # 使用反向计算：距离底部越近，信心越高
+            distance_to_bottom = current_grid / (self.grid_num // 2)  # 0 at bottom, 1 at mid
+            confidence = 0.9 - distance_to_bottom * 0.4  # 0.9 at bottom, 0.5 at mid
+            confidence = max(0.5, min(0.9, confidence))  # 限制在[0.5, 0.9]
+            
             return {
                 'action': 'buy',
                 'reason': f'初始建仓：价格在网格{current_grid}/{self.grid_num}，位于下半区',
-                'confidence': 0.7,
+                'confidence': confidence,
                 'price': current_price,
                 'grid_info': {
                     'current_grid': current_grid,
@@ -175,10 +264,20 @@ class GridTradingStrategy:
             
             # 卖出信号：价格上涨到上方网格
             if current_grid > self.grid_num // 2 and profit_pct > 2:  # 至少2%利润
+                # 卖出信心：
+                # 1. 基于网格位置：越接近上限，信心越高（0.3 -> 0.7）
+                # 2. 基于盈利幅度：盈利越多，信心越高
+                grid_position_factor = (current_grid - self.grid_num // 2) / (self.grid_num // 2)  # 0 to 1
+                profit_factor = min(profit_pct / 30, 1.0)  # 盈利30%时达到1.0
+                
+                # 综合信心：位置权重60%，盈利权重40%
+                confidence = 0.3 + grid_position_factor * 0.4 + profit_factor * 0.2
+                confidence = max(0.3, min(0.9, confidence))  # 限制在[0.3, 0.9]
+                
                 return {
                     'action': 'sell',
                     'reason': f'网格卖出：价格在网格{current_grid}/{self.grid_num}，盈利{profit_pct:.2f}%',
-                    'confidence': 0.8,
+                    'confidence': confidence,
                     'price': current_price,
                     'profit_pct': profit_pct,
                     'grid_info': {
@@ -190,10 +289,16 @@ class GridTradingStrategy:
             
             # 加仓信号：价格下跌到下方网格且未在此网格建仓
             elif current_grid < self.grid_num // 2 and current_grid not in self.positions:
+                # 加仓信心：越接近下限，信心越高（0.2 -> 0.9）
+                # 距离下限越近，买入信心越强
+                distance_to_bottom = current_grid / (self.grid_num // 2)  # 1 at mid, 0 at bottom
+                confidence = 0.9 - distance_to_bottom * 0.4  # 0.2 at mid, 0.9 at bottom
+                confidence = max(0.2, min(0.9, confidence))
+                
                 return {
                     'action': 'buy',
                     'reason': f'网格加仓：价格回落到网格{current_grid}/{self.grid_num}',
-                    'confidence': 0.75,
+                    'confidence': confidence,
                     'price': current_price,
                     'grid_info': {
                         'current_grid': current_grid,

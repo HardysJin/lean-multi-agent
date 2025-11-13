@@ -4,7 +4,7 @@
 system:
   lookback_days: 150          # 回看天数（日历天数，约107个交易日，确保策略有足够数据）
   forecast_days: 14            # 预测天数（决策的有效期，每周一次）
-  backtest_start: "2025-5-20"
+  backtest_start: "2025-02-01"
   backtest_end: "2025-11-11"
   initial_capital: 100000
   commission: 0.001  # 0.1% 手续费
@@ -55,6 +55,8 @@ strategies:
     - grid_trading
     - momentum
     - mean_reversion
+    - double_ema_channel
+    - buy_and_hold
     - hold
   default: hold  # 默认策略（当LLM失败或不确定时）
 
@@ -71,7 +73,19 @@ data_sources:
       - SOXL   # 3x 半导体 ETF
       - TLT    # 20年国债 ETF
       - GLD    # 黄金ETF
-      - BMNR   # ETH 囤币股
+      - TSLA   # 特斯拉
+      - AAPL   # 苹果公司
+      - MSFT   # 微软公司
+      - AMZN   # 亚马逊公司
+      - GOOGL  # 谷歌母公司Alphabet
+      - NVDA   # 英伟达公司
+      - META   # Meta公司（前Facebook）
+      - AMD    # 超威半导体
+      - INTC   # 英特尔公司
+      - NFLX   # 奈飞公司
+      - BABA   # 阿里巴巴集团
+      - JPM    # 摩根大通
+      # - BMNR   # ETH 囤币股
   news:
     provider: newsapi
     language: en

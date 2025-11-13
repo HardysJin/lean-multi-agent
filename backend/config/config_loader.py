@@ -7,7 +7,8 @@ import os
 import yaml
 from pathlib import Path
 from typing import Dict, Any, Optional
-from pydantic import BaseModel, Field
+from datetime import datetime
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -55,7 +56,7 @@ class RiskConfig(BaseModel):
 
 class StrategyConfig(BaseModel):
     """策略配置"""
-    available: list = ["grid_trading", "momentum", "mean_reversion", "hold"]
+    available: list = ["grid_trading", "momentum", "mean_reversion", "double_ema_channel", "buy_and_hold", "hold"]
     default: str = "hold"
 
 
@@ -88,7 +89,39 @@ class Config(BaseSettings):
     strategies: StrategyConfig = Field(default_factory=StrategyConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     data_sources: DataSourcesConfig = Field(default_factory=DataSourcesConfig)
-    
+
+    @model_validator(mode='after')
+    def validate_dates(self) -> 'Config':
+        """验证回测日期的有效性"""
+        import re
+        
+        # 验证日期格式 (严格的 YYYY-MM-DD 格式)
+        date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+        
+        if not date_pattern.match(self.system.backtest_start):
+            raise ValueError(
+                f"回测开始日期格式错误: '{self.system.backtest_start}'，"
+                f"应为 YYYY-MM-DD (例如: 2025-01-15)"
+            )
+        
+        if not date_pattern.match(self.system.backtest_end):
+            raise ValueError(
+                f"回测结束日期格式错误: '{self.system.backtest_end}'，"
+                f"应为 YYYY-MM-DD (例如: 2025-06-11)"
+            )
+        
+        try:
+            start_date = datetime.strptime(self.system.backtest_start, '%Y-%m-%d')
+            end_date = datetime.strptime(self.system.backtest_end, '%Y-%m-%d')
+            
+            assert start_date < end_date, (
+                f"回测开始日期 ({self.system.backtest_start}) 必须早于结束日期 ({self.system.backtest_end})"
+            )
+        except ValueError as e:
+            raise ValueError(f"日期解析错误: {e}")
+        
+        return self
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
