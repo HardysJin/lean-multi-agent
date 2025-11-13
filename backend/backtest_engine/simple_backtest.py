@@ -11,6 +11,7 @@ from pathlib import Path
 import json
 
 from backend.config.config_loader import get_config
+from backend.portfolio.portfolio_manager import PortfolioManager
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -49,8 +50,10 @@ class BacktestEngine:
         self.commission = commission if commission is not None else config.system.commission
         self.slippage = slippage if slippage is not None else config.system.slippage
         
-        # 回测结果
-        self.trades = []
+        # Portfolio Manager - 统一管理组合状态
+        self.portfolio = PortfolioManager(initial_capital=self.initial_capital)
+        
+        # 回测结果（额外记录）
         self.equity_curve = []
         self.positions_history = []
         
@@ -99,13 +102,11 @@ class BacktestEngine:
         logger.info(f"总数据点数: {len(df)}")
         logger.info(f"初始资金: ${self.initial_capital:,.2f}")
         
-        # 初始化回测状态
-        cash = self.initial_capital
-        position = 0  # 持仓数量
-        entry_price = 0
-        equity = self.initial_capital
+        # 重置 Portfolio Manager
+        self.portfolio.reset()
         
-        self.trades = []
+        # 回测状态追踪变量
+        symbol = 'SYMBOL'  # 简单回测假设单一标的
         self.equity_curve = []
         self.positions_history = []
         
@@ -119,11 +120,15 @@ class BacktestEngine:
             # 只在回测期间内进行交易和记录
             in_backtest_period = current_date >= start_date
             
+            # 从 Portfolio Manager 获取当前状态
+            position = self.portfolio.get_position_shares(symbol)
+            entry_price = self.portfolio.get_position_entry_price(symbol)
+            
             # 更新策略状态
             if hasattr(strategy, 'entry_price'):
                 strategy.entry_price = entry_price
             if hasattr(strategy, 'position'):
-                strategy.position = position
+                strategy.position = 1 if position > 0 else 0
             
             # 生成信号
             signal = strategy.generate_signals(current_data)
@@ -138,71 +143,51 @@ class BacktestEngine:
             if action == 'buy' and position == 0:
                 # 买入
                 buy_price = current_price * (1 + self.slippage)
-                shares = int(cash * 0.99 / buy_price)  # 99%仓位
+                shares = int(self.portfolio.cash * 0.99 / buy_price)  # 99%仓位
                 
                 if shares > 0:
-                    cost = shares * buy_price * (1 + self.commission)
+                    # 使用 Portfolio Manager 执行买入
+                    success = self.portfolio.execute_buy(
+                        symbol=symbol,
+                        shares=shares,
+                        price=buy_price,
+                        commission=self.commission,
+                        date=current_date.strftime('%Y-%m-%d'),
+                        strategy='simple_backtest'
+                    )
                     
-                    if cost <= cash:
-                        cash -= cost
-                        position = shares
-                        entry_price = buy_price
-                        
-                        trade = {
-                            'date': current_date,
-                            'action': 'BUY',
-                            'price': buy_price,
-                            'shares': shares,
-                            'cost': cost,
-                            'cash': cash,
-                            'reason': signal.get('reason', '')
-                        }
-                        self.trades.append(trade)
-                        
-                        logger.info(f"[{current_date.date()}] 买入: {shares}股 @ ${buy_price:.2f}, 成本${cost:,.2f}")
-                        
+                    if success:
                         # 更新策略状态
-                        strategy.execute_trade('buy', buy_price)
+                        if hasattr(strategy, 'execute_trade'):
+                            strategy.execute_trade('buy', buy_price)
             
             elif action == 'sell' and position > 0:
                 # 卖出
                 sell_price = current_price * (1 - self.slippage)
-                proceeds = position * sell_price * (1 - self.commission)
                 
-                profit = proceeds - (position * entry_price * (1 + self.commission))
-                profit_pct = (profit / (position * entry_price * (1 + self.commission))) * 100
+                # 使用 Portfolio Manager 执行卖出
+                success = self.portfolio.execute_sell(
+                    symbol=symbol,
+                    shares=position,
+                    price=sell_price,
+                    commission=self.commission,
+                    date=current_date.strftime('%Y-%m-%d'),
+                    strategy='simple_backtest'
+                )
                 
-                cash += proceeds
-                
-                trade = {
-                    'date': current_date,
-                    'action': 'SELL',
-                    'price': sell_price,
-                    'shares': position,
-                    'proceeds': proceeds,
-                    'cash': cash,
-                    'profit': profit,
-                    'profit_pct': profit_pct,
-                    'reason': signal.get('reason', '')
-                }
-                self.trades.append(trade)
-                
-                logger.info(f"[{current_date.date()}] 卖出: {position}股 @ ${sell_price:.2f}, "
-                          f"收益${profit:,.2f} ({profit_pct:+.2f}%)")
-                
-                position = 0
-                entry_price = 0
-                
-                # 更新策略状态
-                strategy.execute_trade('sell', sell_price)
+                if success:
+                    # 更新策略状态
+                    if hasattr(strategy, 'execute_trade'):
+                        strategy.execute_trade('sell', sell_price)
             
-            # 计算当前权益
-            equity = cash + position * current_price
+            # 更新 Portfolio Manager 的组合价值快照
+            position = self.portfolio.get_position_shares(symbol)
+            equity = self.portfolio.get_portfolio_value({symbol: current_price})
             
             self.equity_curve.append({
                 'date': current_date,
                 'equity': equity,
-                'cash': cash,
+                'cash': self.portfolio.cash,
                 'position_value': position * current_price,
                 'position': position
             })
@@ -214,35 +199,22 @@ class BacktestEngine:
             })
         
         # 最后如果还持仓，强制平仓
-        if position > 0:
+        final_position = self.portfolio.get_position_shares(symbol)
+        if final_position > 0:
             final_price = df.iloc[-1]['Close']
             final_date = df.index[-1]
-            proceeds = position * final_price * (1 - self.commission)
-            profit = proceeds - (position * entry_price * (1 + self.commission))
-            profit_pct = (profit / (position * entry_price * (1 + self.commission))) * 100
             
-            cash += proceeds
-            
-            trade = {
-                'date': final_date,
-                'action': 'SELL',
-                'price': final_price,
-                'shares': position,
-                'proceeds': proceeds,
-                'cash': cash,
-                'profit': profit,
-                'profit_pct': profit_pct,
-                'reason': '期末平仓'
-            }
-            self.trades.append(trade)
-            
-            logger.info(f"[{final_date.date()}] 期末平仓: {position}股 @ ${final_price:.2f}, "
-                      f"收益${profit:,.2f} ({profit_pct:+.2f}%)")
-            
-            position = 0
+            self.portfolio.execute_sell(
+                symbol=symbol,
+                shares=final_position,
+                price=final_price,
+                commission=self.commission,
+                date=final_date.strftime('%Y-%m-%d'),
+                strategy='simple_backtest'
+            )
         
         # 计算性能指标
-        final_equity = cash
+        final_equity = self.portfolio.cash
         performance = self._calculate_performance(df)
         
         logger.info("=" * 70)
@@ -268,9 +240,11 @@ class BacktestEngine:
         final = equity_df['equity'].iloc[-1]
         total_return = ((final / initial) - 1) * 100
         
-        # 交易统计
-        trades_df = pd.DataFrame([t for t in self.trades if 'profit' in t])
-        num_trades = len(trades_df)
+        # 交易统计（从 Portfolio Manager 获取）
+        all_trades = self.portfolio.get_trades()
+        sell_trades = [t for t in all_trades if t.action == 'sell' and t.profit is not None]
+        trades_df = pd.DataFrame([{'profit': t.profit} for t in sell_trades])
+        num_trades = len(sell_trades)
         
         if num_trades > 0:
             winning_trades = trades_df[trades_df['profit'] > 0]
@@ -317,7 +291,7 @@ class BacktestEngine:
             'profit_factor': profit_factor,
             'max_drawdown': max_drawdown,
             'sharpe_ratio': sharpe_ratio,
-            'trades': self.trades,
+            'trades': [t.to_dict() for t in self.portfolio.get_trades()],
             'equity_curve': self.equity_curve
         }
     
@@ -328,7 +302,7 @@ class BacktestEngine:
             return
         
         results = {
-            'trades': self.trades,
+            'trades': [t.to_dict() for t in self.portfolio.get_trades()],
             'equity_curve': self.equity_curve,
             'positions_history': self.positions_history
         }

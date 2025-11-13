@@ -24,6 +24,7 @@ from backend.data_collectors.market_data import MarketDataCollector
 from backend.data_collectors.news_collector import NewsCollector
 from backend.data_collectors.sentiment_analyzer import SentimentAnalyzer
 from backend.config.config_loader import get_config
+from backend.portfolio.portfolio_manager import PortfolioManager
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -73,13 +74,8 @@ class LLMBacktestEngine:
         self.news_collector = NewsCollector()  # 自动加载API key
         self.sentiment_collector = SentimentAnalyzer()
         
-        # 回测状态
-        self.cash = self.initial_capital
-        self.positions = {}  # {symbol: shares}
-        self.position_costs = {}  # {symbol: total_cost} 用于计算平均成本
-        self.trades = []
-        self.decisions = []
-        self.portfolio_values = []
+        # Portfolio Manager - 统一管理组合状态
+        self.portfolio = PortfolioManager(initial_capital=self.initial_capital)
         
         # 策略实例缓存 {strategy_name: strategy_instance}
         self.strategy_instances = {}
@@ -188,7 +184,8 @@ class LLMBacktestEngine:
             # Coordinator综合决策（调用LLM）
             logger.info("运行Coordinator (LLM决策)...")
             # 准备decision history（转换格式以适配prompts.format_decision_history）
-            recent_decisions = self.decisions[-3:] if len(self.decisions) >= 3 else self.decisions
+            all_decisions = self.portfolio.get_decisions()
+            recent_decisions = all_decisions[-3:] if len(all_decisions) >= 3 else all_decisions
             formatted_history = self._format_decision_history_for_prompt(recent_decisions)
             
             coordinator_input = {
@@ -214,11 +211,10 @@ class LLMBacktestEngine:
             logger.info(f"推理: {decision.get('reasoning', 'N/A')[:100]}...")
             
             # 记录LLM决策
-            self.decisions.append({
-                'date': decision_date.strftime('%Y-%m-%d'),
-                'decision': decision,
-                'daily_executions': []  # 存储本周每天的执行结果
-            })
+            self.portfolio.record_decision(
+                date=decision_date.strftime('%Y-%m-%d'),
+                decision=decision
+            )
             
             # 执行策略：在forecast期间（下一周）每天运行策略
             next_decision_date = decision_dates[i+1] if i+1 < len(decision_dates) else end_date
@@ -248,37 +244,35 @@ class LLMBacktestEngine:
                 )
                 
                 # 记录每日执行
-                self.decisions[-1]['daily_executions'].append({
+                self.portfolio.add_daily_execution({
                     'date': trading_day.strftime('%Y-%m-%d'),
                     'execution': execution_result
                 })
                 
                 # 每天更新组合价值
-                portfolio_value = self._calculate_portfolio_value(symbol, price_df, trading_day)
-                self.portfolio_values.append({
-                    'date': trading_day.strftime('%Y-%m-%d'),
-                    'value': portfolio_value,
-                    'cash': self.cash,
-                    'positions': dict(self.positions)
-                })
+                current_price = self._get_price_at_date(price_df, trading_day)
+                self.portfolio.record_portfolio_value(
+                    date=trading_day.strftime('%Y-%m-%d'),
+                    current_prices={symbol: current_price} if current_price else {}
+                )
                 
                 if execution_result['action'] != 'hold':
                     logger.info(f"    → {execution_result['action'].upper()}: {execution_result.get('shares', 0)} 股")
             
             # 打印本周汇总
-            if self.portfolio_values:
-                portfolio_value = self.portfolio_values[-1]['value']
+            portfolio_history = self.portfolio.get_portfolio_history()
+            if portfolio_history:
+                portfolio_value = portfolio_history[-1]['value']
                 logger.info(f"组合价值: ${portfolio_value:,.2f}")
-                logger.info(f"现金: ${self.cash:,.2f}")
-                logger.info(f"持仓: {self.positions}")
+                logger.info(f"现金: ${self.portfolio.cash:,.2f}")
+                logger.info(f"持仓: {self.portfolio.get_all_positions()}")
             else:
                 # 如果没有交易日，手动计算当前组合价值
                 current_price = self._get_price_at_date(price_df, decision_date)
-                position_value = self.positions.get(symbol, 0) * current_price if current_price else 0
-                portfolio_value = self.cash + position_value
+                portfolio_value = self.portfolio.get_portfolio_value({symbol: current_price} if current_price else {})
                 logger.info(f"组合价值: ${portfolio_value:,.2f} (无交易日)")
-                logger.info(f"现金: ${self.cash:,.2f}")
-                logger.info(f"持仓: {self.positions}")
+                logger.info(f"现金: ${self.portfolio.cash:,.2f}")
+                logger.info(f"持仓: {self.portfolio.get_all_positions()}")
         
         # 计算最终结果
         results = self._calculate_results(symbol, price_df, start_date, end_date)
@@ -338,31 +332,11 @@ class LLMBacktestEngine:
     def _get_portfolio_snapshot(self, symbol: str, price_df: pd.DataFrame, date: datetime) -> Dict[str, Any]:
         """获取当前组合快照"""
         current_price = self._get_price_at_date(price_df, date)
-        
-        holdings = {}
-        if symbol in self.positions and self.positions[symbol] > 0:
-            holdings[symbol] = {
-                'shares': self.positions[symbol],
-                'current_price': current_price,
-                'market_value': self.positions[symbol] * current_price
-            }
-        
-        total_value = self.cash + sum(h['market_value'] for h in holdings.values())
-        
-        return {
-            'cash': self.cash,
-            'holdings': holdings,
-            'total_value': total_value
-        }
+        return self.portfolio.get_portfolio_snapshot(symbol, current_price if current_price else 0.0)
     
     def _calculate_last_period_pnl(self) -> float:
         """计算上期盈亏"""
-        if len(self.portfolio_values) < 2:
-            return 0.0
-        
-        current = self.portfolio_values[-1]['value']
-        previous = self.portfolio_values[-2]['value']
-        return current - previous
+        return self.portfolio.calculate_last_period_pnl()
     
     def _format_decision_history_for_prompt(self, decisions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -377,7 +351,11 @@ class LLMBacktestEngine:
         formatted = []
         
         for i, dec in enumerate(decisions):
-            decision = dec.get('decision', {})
+            # dec 现在是 Decision 对象，需要从其属性中提取
+            if hasattr(dec, 'decision'):
+                decision = dec.decision
+            else:
+                decision = dec.get('decision', {}) if isinstance(dec, dict) else {}
             
             # 提取期间信息
             analysis_period = decision.get('analysis_period', {})
@@ -465,15 +443,19 @@ class LLMBacktestEngine:
             # 如果数据不足，仍然传递给策略，让策略自己决定如何处理
             # 策略内部会返回hold信号
         
-        # 同步策略的持仓状态（从回测引擎传递）
+        # 同步策略的持仓状态（从 Portfolio Manager 读取）
         if hasattr(strategy, 'position'):
-            strategy.position = 1 if self.positions.get(symbol, 0) > 0 else 0
+            strategy.position = 1 if self.portfolio.has_position(symbol) else 0
         if hasattr(strategy, 'entry_price') and strategy.position == 1:
-            # 获取入场价格（从交易记录中查找最后一次买入价）
-            for trade in reversed(self.trades):
-                if trade['action'] == 'buy':
-                    strategy.entry_price = trade['price']
-                    break
+            # 获取入场价格
+            entry_price = self.portfolio.get_position_entry_price(symbol)
+            if entry_price > 0:
+                strategy.entry_price = entry_price
+            else:
+                # 如果 Portfolio Manager 中没有记录，尝试从交易记录获取
+                last_buy_price = self.portfolio.get_last_buy_price()
+                if last_buy_price:
+                    strategy.entry_price = last_buy_price
         
         # 调用策略的generate_signals方法
         strategy_result = strategy.generate_signals(period_prices)
@@ -522,7 +504,7 @@ class LLMBacktestEngine:
             执行结果字典
         """
         action = strategy_result.get('action', 'hold').lower()
-        current_position = self.positions.get(symbol, 0)
+        current_position = self.portfolio.get_position_shares(symbol)
         
         # 初始化执行记录
         execution = {
@@ -571,8 +553,8 @@ class LLMBacktestEngine:
             current_date: 当前日期（用于获取VIX）
         """
         # 检查现金充足性
-        if self.cash <= 0:
-            logger.info(f"现金不足 (${self.cash:.2f})，跳过买入")
+        if self.portfolio.cash <= 0:
+            logger.info(f"现金不足 (${self.portfolio.cash:.2f})，跳过买入")
             return
         
         # 风控参数（基础值）
@@ -587,7 +569,7 @@ class LLMBacktestEngine:
         )
         
         # 计算当前资产和持仓比例
-        total_assets = self.cash + current_position * current_price
+        total_assets = self.portfolio.cash + current_position * current_price
         current_position_value = current_position * current_price
         current_position_ratio = current_position_value / total_assets if total_assets > 0 else 0
         
@@ -611,7 +593,7 @@ class LLMBacktestEngine:
         # 计算目标持仓价值和可用现金
         target_position_value = total_assets * buy_percent
         available_for_purchase = target_position_value - current_position_value
-        available_cash = min(available_for_purchase, self.cash) if available_for_purchase > 0 else 0
+        available_cash = min(available_for_purchase, self.portfolio.cash) if available_for_purchase > 0 else 0
         
         if available_cash <= 0:
             logger.info("可用资金不足，跳过买入")
@@ -624,28 +606,26 @@ class LLMBacktestEngine:
             logger.info(f"可用资金不足以买入1股 (${available_cash:.2f})，跳过买入")
             return
         
-        # 计算实际成本
-        cost = shares * current_price * (1 + self.commission)
+        # 使用 Portfolio Manager 执行买入（原子性保证）
+        success = self.portfolio.execute_buy(
+            symbol=symbol,
+            shares=shares,
+            price=current_price,
+            commission=self.commission,
+            date=execution['date'],
+            strategy=execution['strategy']
+        )
         
-        # 最终现金充足性检查
-        if cost > self.cash:
-            logger.info(f"现金不足 (需要${cost:.2f}, 可用${self.cash:.2f})，跳过买入")
+        if not success:
+            logger.warning("买入失败")
             return
         
-        # 执行买入
-        self.cash -= cost
-        self.positions[symbol] = self.positions.get(symbol, 0) + shares
-        self.position_costs[symbol] = self.position_costs.get(symbol, 0) + cost
-        
         # 更新执行记录
+        cost = shares * current_price * (1 + self.commission)
         execution['action'] = 'buy'
         execution['shares'] = shares
         execution['cost'] = cost
-        execution['cash'] = self.cash
-        
-        # 记录交易
-        self.trades.append(execution.copy())
-        logger.info(f"✓ 买入 {shares} 股 @ ${current_price:.2f}, 成本: ${cost:.2f}")
+        execution['cash'] = self.portfolio.cash
     
     def _get_dynamic_position_limit(
         self,
@@ -667,7 +647,8 @@ class LLMBacktestEngine:
             (调整后的上限, 是否为例外情况)
         """
         # 获取最新的市场数据（如果有）
-        if not self.portfolio_values:
+        portfolio_history = self.portfolio.get_portfolio_history()
+        if not portfolio_history:
             return base_limit, False
         
         # 直接从市场数据获取VIX
@@ -754,33 +735,31 @@ class LLMBacktestEngine:
         shares = ceil(current_position * confidence)
         shares = min(shares, current_position)  # 确保不超过持仓
         
-        # 计算收入和盈亏
-        proceeds = shares * current_price * (1 - self.commission)
+        # 使用 Portfolio Manager 执行卖出（原子性保证）
+        success = self.portfolio.execute_sell(
+            symbol=symbol,
+            shares=shares,
+            price=current_price,
+            commission=self.commission,
+            date=execution['date'],
+            strategy=execution['strategy']
+        )
         
-        # 计算平均成本和盈亏
-        total_cost = self.position_costs.get(symbol, 0)
-        avg_cost = total_cost / current_position if current_position > 0 else 0
-        sold_cost = shares * avg_cost
-        profit = proceeds - sold_cost
+        if not success:
+            logger.warning("卖出失败")
+            return
         
-        # 执行卖出
-        self.cash += proceeds
-        self.positions[symbol] = current_position - shares
-        self.position_costs[symbol] = total_cost - sold_cost
-        
-        assert self.positions[symbol] >= 0, "持仓数量不能为负, 暂不支持卖空"
+        # 获取最后一笔交易记录（刚刚执行的卖出）
+        trades = self.portfolio.get_trades()
+        last_trade = trades[-1] if trades else None
         
         # 更新执行记录
         execution['action'] = 'sell'
         execution['shares'] = -shares
-        execution['cost'] = -proceeds
-        execution['proceeds'] = proceeds
-        execution['profit'] = profit
-        execution['cash'] = self.cash
-        
-        # 记录交易
-        self.trades.append(execution.copy())
-        logger.info(f"✓ 卖出 {shares} 股 @ ${current_price:.2f}, 收入: ${proceeds:.2f}, 盈亏: ${profit:+,.2f}")
+        execution['cost'] = last_trade.cost if last_trade else 0
+        execution['proceeds'] = -last_trade.cost if last_trade else 0
+        execution['profit'] = last_trade.profit if last_trade else 0
+        execution['cash'] = self.portfolio.cash
     
     def _get_price_at_date(self, price_df: pd.DataFrame, date: datetime) -> float:
         """获取指定日期的价格（收盘价）"""
@@ -796,15 +775,8 @@ class LLMBacktestEngine:
     
     def _calculate_portfolio_value(self, symbol: str, price_df: pd.DataFrame, date: datetime) -> float:
         """计算组合价值"""
-        cash = self.cash
-        position_value = 0
-        
-        if symbol in self.positions and self.positions[symbol] > 0:
-            price = self._get_price_at_date(price_df, date)
-            if price:
-                position_value = self.positions[symbol] * price
-        
-        return cash + position_value
+        price = self._get_price_at_date(price_df, date)
+        return self.portfolio.get_portfolio_value({symbol: price} if price else {})
     
     def _calculate_results(
         self,
@@ -816,7 +788,8 @@ class LLMBacktestEngine:
         """计算回测结果"""
         
         # 最终组合价值
-        final_value = self.portfolio_values[-1]['value'] if self.portfolio_values else self.initial_capital
+        portfolio_history = self.portfolio.get_portfolio_history()
+        final_value = portfolio_history[-1]['value'] if portfolio_history else self.initial_capital
         
         # 收益相关
         total_return = (final_value - self.initial_capital) / self.initial_capital
@@ -833,17 +806,18 @@ class LLMBacktestEngine:
         annual_return = (1 + total_return) ** (1 / years) - 1 if years > 0 else 0
         
         # 计算最大回撤
-        values = [pv['value'] for pv in self.portfolio_values]
+        values = [pv['value'] for pv in portfolio_history]
         max_drawdown = self._calculate_max_drawdown(values)
         
         # 胜率（只统计卖出交易）
-        sell_trades = [t for t in self.trades if t['action'] == 'sell' and 'profit' in t]
-        winning_trades = sum(1 for t in sell_trades if t['profit'] > 0)
+        all_trades = self.portfolio.get_trades()
+        sell_trades = [t for t in all_trades if t.action == 'sell' and t.profit is not None]
+        winning_trades = sum(1 for t in sell_trades if t.profit > 0)
         total_sell_trades = len(sell_trades)
         win_rate = winning_trades / total_sell_trades if total_sell_trades > 0 else 0
         
         # 总交易次数（买入+卖出）
-        total_trades = len([t for t in self.trades if t['action'] in ['buy', 'sell']])
+        total_trades = len([t for t in all_trades if t.action in ['buy', 'sell']])
         
         results = {
             'summary': {
@@ -863,9 +837,9 @@ class LLMBacktestEngine:
                 'benchmark_return': bh_return,
                 'alpha': total_return - bh_return
             },
-            'trades': self.trades,
-            'decisions': self.decisions,
-            'portfolio_values': self.portfolio_values
+            'trades': [t.to_dict() for t in self.portfolio.get_trades()],
+            'decisions': [d.to_dict() for d in self.portfolio.get_decisions()],
+            'portfolio_values': self.portfolio.get_portfolio_history()
         }
         
         # 打印汇总

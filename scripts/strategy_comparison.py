@@ -227,7 +227,7 @@ class StrategyComparison:
             strategy_name = t.get('strategy', 'N/A')
             
             # 获取交易后的现金余额
-            cash_balance = float(t.get('cash', 0))
+            cash_balance = float(t.get('cash_after', t.get('cash', 0)))
             
             # 金额列：买入显示成本，卖出显示收益
             if action == 'buy':
@@ -301,7 +301,7 @@ class StrategyComparison:
                     # 获取最后一笔交易的现金余额
                     last_cash = 0
                     if llm_trades_raw:
-                        last_cash = float(llm_trades_raw[-1].get('cash', 0))
+                        last_cash = float(llm_trades_raw[-1].get('cash_after', llm_trades_raw[-1].get('cash', 0)))
                     
                     # 添加当前持仓状态行
                     trade_records.append([
