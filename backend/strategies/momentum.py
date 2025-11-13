@@ -7,9 +7,10 @@
 from typing import Dict, Any
 import pandas as pd
 import numpy as np
+from backend.strategies.base_strategy import BaseStrategy
 
 
-class MomentumStrategy:
+class MomentumStrategy(BaseStrategy):
     """
     动量策略
     
@@ -53,6 +54,17 @@ class MomentumStrategy:
             rsi_overbought: RSI超买线
             rsi_oversold: RSI超卖线
         """
+        super().__init__(
+            momentum_period=momentum_period,
+            entry_threshold=entry_threshold,
+            exit_threshold=exit_threshold,
+            ma_period=ma_period,
+            volume_multiplier=volume_multiplier,
+            use_rsi_filter=use_rsi_filter,
+            rsi_period=rsi_period,
+            rsi_overbought=rsi_overbought,
+            rsi_oversold=rsi_oversold
+        )
         self.momentum_period = momentum_period
         self.entry_threshold = entry_threshold
         self.exit_threshold = exit_threshold
@@ -62,11 +74,6 @@ class MomentumStrategy:
         self.rsi_period = rsi_period
         self.rsi_overbought = rsi_overbought
         self.rsi_oversold = rsi_oversold
-        
-        # 持仓状态
-        self.position = 0
-        self.entry_price = 0
-        self.entry_momentum = 0
     
     def get_required_data_points(self) -> int:
         """返回策略需要的最小数据点数"""
@@ -95,12 +102,13 @@ class MomentumStrategy:
         
         return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50.0
     
-    def generate_signals(self, market_data: pd.DataFrame) -> Dict[str, Any]:
+    def generate_signals(self, market_data: pd.DataFrame, **context) -> Dict[str, Any]:
         """
         生成交易信号
         
         Args:
             market_data: DataFrame包含OHLCV数据
+            **context: 上下文信息（如持仓状态、入场价格等）
         
         Returns:
             交易信号字典
@@ -131,8 +139,12 @@ class MomentumStrategy:
         # 计算RSI
         rsi = self._calculate_rsi(df['Close'], self.rsi_period) if self.use_rsi_filter else 50.0
         
+        # 从上下文获取当前持仓状态
+        current_position = context.get('position', 0)
+        entry_price = context.get('entry_price', 0)
+        
         # 无持仓时的买入信号
-        if self.position == 0:
+        if current_position == 0:
             # 动量买入条件
             momentum_strong = momentum > self.entry_threshold
             price_above_ma = current_price > ma
@@ -191,7 +203,7 @@ class MomentumStrategy:
         
         # 持仓时的卖出信号
         else:
-            profit_pct = ((current_price / self.entry_price) - 1) * 100 if self.entry_price > 0 else 0
+            profit_pct = ((current_price / entry_price) - 1) * 100 if entry_price > 0 else 0
             
             # 动量转弱卖出
             momentum_weak = momentum < self.exit_threshold
@@ -241,24 +253,10 @@ class MomentumStrategy:
                     }
                 }
     
-    def execute_trade(self, action: str, price: float):
-        """
-        执行交易并更新状态
-        
-        Args:
-            action: 交易动作
-            price: 交易价格
-        """
-        if action == 'buy':
-            self.position = 1
-            self.entry_price = price
-        elif action == 'sell':
-            self.position = 0
-            self.entry_price = 0
-    
     def get_strategy_info(self) -> Dict[str, Any]:
         """返回策略信息"""
-        return {
+        info = super().get_strategy_info()
+        info.update({
             'name': 'momentum',
             'description': '动量策略（追涨杀跌，适合趋势行情）',
             'parameters': {
@@ -270,4 +268,5 @@ class MomentumStrategy:
             },
             'risk_level': 'medium-high',
             'suitable_market': ['trending', 'bullish', 'volatile']
-        }
+        })
+        return info

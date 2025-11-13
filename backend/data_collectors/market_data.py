@@ -89,7 +89,7 @@ class MarketDataCollector(BaseCollector):
                 cached_ticker_data = self._get_from_cache(ticker_cache_key)
                 
                 if cached_ticker_data:
-                    logger.info(f"Using cached data for {ticker}")
+                    # logger.info(f"Using cached data for {ticker}")
                     market_data[ticker] = cached_ticker_data
                     continue
                 

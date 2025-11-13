@@ -623,30 +623,32 @@ class LLMBacktestEngine:
             # 如果数据不足，仍然传递给策略，让策略自己决定如何处理
             # 策略内部会返回hold信号
         
-        # 同步策略的持仓状态（从 Portfolio Manager 读取）
-        if hasattr(strategy, 'position'):
-            strategy.position = 1 if self.portfolio.has_position(symbol) else 0
-        if hasattr(strategy, 'entry_price') and strategy.position == 1:
-            # 获取入场价格
-            entry_price = self.portfolio.get_position_entry_price(symbol)
-            if entry_price > 0:
-                strategy.entry_price = entry_price
-            else:
-                # 如果 Portfolio Manager 中没有记录，尝试从交易记录获取
-                last_buy_price = self.portfolio.get_last_buy_price()
-                if last_buy_price:
-                    strategy.entry_price = last_buy_price
+        # 准备上下文信息传递给策略（新架构）
+        position_shares = self.portfolio.get_position_shares(symbol)
+        entry_price = self.portfolio.get_position_entry_price(symbol)
         
-        # 为新的position策略注入当前仓位和组合价值
-        if hasattr(strategy, '_current_position'):
-            # 计算当前持仓比例 (position_value / total_assets)
-            position_shares = self.portfolio.get_position_shares(symbol)
-            total_value = self.portfolio.get_total_value(current_price if position_shares > 0 else 0)
-            strategy._current_position = (position_shares * current_price / total_value) if total_value > 0 else 0.0
-            strategy._portfolio_value = total_value
+        # 如果 Portfolio Manager 中没有记录入场价格，尝试从交易记录获取
+        if entry_price <= 0 and position_shares > 0:
+            last_buy_price = self.portfolio.get_last_buy_price()
+            if last_buy_price:
+                entry_price = last_buy_price
         
-        # 调用策略的generate_signals方法
-        strategy_result = strategy.generate_signals(period_prices)
+        # 计算当前持仓比例和组合价值
+        total_value = self.portfolio.get_total_value(current_price if position_shares > 0 else 0)
+        position_ratio = (position_shares * current_price / total_value) if total_value > 0 else 0.0
+        
+        # 构建上下文字典
+        context = {
+            'position': 1 if position_shares > 0 else 0,
+            'entry_price': entry_price,
+            'shares': position_shares,
+            'positions': {},  # 网格策略可能需要
+            'current_position': position_ratio,  # 持仓比例
+            'portfolio_value': total_value  # 组合总价值
+        }
+        
+        # 调用策略的generate_signals方法（新架构：通过context传递状态）
+        strategy_result = strategy.generate_signals(period_prices, **context)
         
         if not strategy_result or 'action' not in strategy_result:
             logger.warning(f"策略 {strategy_name} 未生成有效信号")
@@ -712,11 +714,8 @@ class LLMBacktestEngine:
         else:
             logger.info("策略信号: 持有")
         
-        # 通知策略更新其内部状态（如果策略有execute_trade方法）
-        if execution['action'] in ['buy', 'sell'] and strategy_name in self.strategy_instances:
-            strategy = self.strategy_instances[strategy_name]
-            if hasattr(strategy, 'execute_trade'):
-                strategy.execute_trade(execution['action'], current_price)
+        # 注意：新架构中策略不再需要execute_trade方法
+        # 仓位管理完全由回测引擎（Portfolio Manager）负责
         
         return execution
     

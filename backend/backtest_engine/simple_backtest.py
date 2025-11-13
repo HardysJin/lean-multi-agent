@@ -124,14 +124,16 @@ class BacktestEngine:
             position = self.portfolio.get_position_shares(symbol)
             entry_price = self.portfolio.get_position_entry_price(symbol)
             
-            # 更新策略状态
-            if hasattr(strategy, 'entry_price'):
-                strategy.entry_price = entry_price
-            if hasattr(strategy, 'position'):
-                strategy.position = 1 if position > 0 else 0
+            # 准备上下文信息传递给策略
+            context = {
+                'position': 1 if position > 0 else 0,
+                'entry_price': entry_price,
+                'shares': position,
+                'positions': {}  # 网格策略可能需要
+            }
             
-            # 生成信号
-            signal = strategy.generate_signals(current_data)
+            # 生成信号（新架构：通过context传递状态）
+            signal = strategy.generate_signals(current_data, **context)
             action = signal.get('action', 'hold')
             
             # 只在回测期间内执行交易
@@ -155,11 +157,6 @@ class BacktestEngine:
                         date=current_date.strftime('%Y-%m-%d'),
                         strategy='simple_backtest'
                     )
-                    
-                    if success:
-                        # 更新策略状态
-                        if hasattr(strategy, 'execute_trade'):
-                            strategy.execute_trade('buy', buy_price)
             
             elif action == 'sell' and position > 0:
                 # 卖出
@@ -174,11 +171,6 @@ class BacktestEngine:
                     date=current_date.strftime('%Y-%m-%d'),
                     strategy='simple_backtest'
                 )
-                
-                if success:
-                    # 更新策略状态
-                    if hasattr(strategy, 'execute_trade'):
-                        strategy.execute_trade('sell', sell_price)
             
             # 更新 Portfolio Manager 的组合价值快照
             position = self.portfolio.get_position_shares(symbol)

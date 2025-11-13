@@ -7,9 +7,10 @@
 from typing import Dict, Any
 import pandas as pd
 import numpy as np
+from backend.strategies.base_strategy import BaseStrategy
 
 
-class MeanReversionStrategy:
+class MeanReversionStrategy(BaseStrategy):
     """
     均值回归策略
     
@@ -55,6 +56,17 @@ class MeanReversionStrategy:
             profit_target: 止盈目标（%）
             stop_loss: 止损线（%）
         """
+        super().__init__(
+            ma_period=ma_period,
+            std_multiplier=std_multiplier,
+            rsi_period=rsi_period,
+            rsi_oversold=rsi_oversold,
+            rsi_overbought=rsi_overbought,
+            use_bollinger=use_bollinger,
+            use_rsi=use_rsi,
+            profit_target=profit_target,
+            stop_loss=stop_loss
+        )
         self.ma_period = ma_period
         self.std_multiplier = std_multiplier
         self.rsi_period = rsi_period
@@ -64,10 +76,6 @@ class MeanReversionStrategy:
         self.use_rsi = use_rsi
         self.profit_target = profit_target
         self.stop_loss = stop_loss
-        
-        # 持仓状态
-        self.position = 0
-        self.entry_price = 0
     
     def get_required_data_points(self) -> int:
         """返回策略需要的最小数据点数"""
@@ -98,12 +106,13 @@ class MeanReversionStrategy:
         
         return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50.0
     
-    def generate_signals(self, market_data: pd.DataFrame) -> Dict[str, Any]:
+    def generate_signals(self, market_data: pd.DataFrame, **context) -> Dict[str, Any]:
         """
         生成交易信号
         
         Args:
             market_data: DataFrame包含OHLCV数据
+            **context: 上下文信息（如持仓状态、入场价格等）
         
         Returns:
             交易信号字典
@@ -145,8 +154,12 @@ class MeanReversionStrategy:
         # 价格偏离度
         deviation_pct = ((current_price / ma) - 1) * 100 if ma > 0 else 0
         
+        # 从上下文获取当前持仓状态
+        current_position = context.get('position', 0)
+        entry_price = context.get('entry_price', 0)
+        
         # 无持仓时的买入信号
-        if self.position == 0:
+        if current_position == 0:
             # 超卖信号检测
             bollinger_oversold = self.use_bollinger and (current_price < bb_lower or bb_position < 0.2)
             rsi_oversold = self.use_rsi and (rsi < self.rsi_oversold)
@@ -197,7 +210,7 @@ class MeanReversionStrategy:
         
         # 持仓时的卖出信号
         else:
-            profit_pct = ((current_price / self.entry_price) - 1) * 100 if self.entry_price > 0 else 0
+            profit_pct = ((current_price / entry_price) - 1) * 100 if entry_price > 0 else 0
             
             # 卖出条件
             profit_target_reached = profit_pct >= self.profit_target
@@ -280,21 +293,6 @@ class MeanReversionStrategy:
                     }
                 }
     
-    def execute_trade(self, action: str, price: float):
-        """
-        执行交易并更新状态
-        
-        Args:
-            action: 交易动作
-            price: 交易价格
-        """
-        if action == 'buy':
-            self.position = 1
-            self.entry_price = price
-        elif action == 'sell':
-            self.position = 0
-            self.entry_price = 0
-    
     def get_strategy_info(self) -> Dict[str, Any]:
         """返回策略信息"""
         indicators_used = []
@@ -303,7 +301,8 @@ class MeanReversionStrategy:
         if self.use_rsi:
             indicators_used.append(f'RSI({self.rsi_period}期)')
         
-        return {
+        info = super().get_strategy_info()
+        info.update({
             'name': 'mean_reversion',
             'description': '均值回归策略（超卖买入，回归卖出）',
             'parameters': {
@@ -314,4 +313,5 @@ class MeanReversionStrategy:
             },
             'risk_level': 'medium',
             'suitable_market': ['sideways', 'range-bound', 'volatile']
-        }
+        })
+        return info

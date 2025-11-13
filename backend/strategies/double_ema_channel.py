@@ -8,9 +8,10 @@
 from typing import Dict, Any, Optional
 import pandas as pd
 import numpy as np
+from backend.strategies.base_strategy import BaseStrategy
 
 
-class DoubleEmaChannelStrategy:
+class DoubleEmaChannelStrategy(BaseStrategy):
     """
     双EMA通道突破策略
     
@@ -39,26 +40,30 @@ class DoubleEmaChannelStrategy:
             stop_loss_pct: 止损百分比
             take_profit_pct: 止盈百分比
         """
+        super().__init__(
+            fast_period=fast_period,
+            slow_period=slow_period,
+            volume_multiplier=volume_multiplier,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct
+        )
         self.fast_period = fast_period
         self.slow_period = slow_period
         self.volume_multiplier = volume_multiplier
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
-        
-        # 交易状态
-        self.entry_price = 0
-        self.position = 0
     
     def get_required_data_points(self) -> int:
         """返回策略需要的最小数据点数"""
         return self.slow_period + 5  # 慢速通道周期 + 成交量MA窗口
     
-    def generate_signals(self, market_data: pd.DataFrame) -> Dict[str, Any]:
+    def generate_signals(self, market_data: pd.DataFrame, **context) -> Dict[str, Any]:
         """
         基于市场数据生成交易信号
         
         Args:
             market_data: DataFrame包含OHLCV数据，列名：Open, High, Low, Close, Volume
+            **context: 上下文信息（如持仓状态、入场价格等）
         
         Returns:
             交易信号字典
@@ -94,8 +99,12 @@ class DoubleEmaChannelStrategy:
         current_volume = latest['Volume']
         avg_volume = latest['avg_volume']
         
+        # 从上下文获取当前持仓状态
+        current_position = context.get('position', 0)
+        entry_price = context.get('entry_price', 0)
+        
         # 生成交易信号
-        if self.position == 0:
+        if current_position == 0:
             # 买入信号检查 - 简化条件，只需要价格突破即可
             signal_breakout = current_price > up1
             
@@ -134,11 +143,11 @@ class DoubleEmaChannelStrategy:
         else:  # 已持仓
             # 卖出信号检查
             signal_breakdown = current_price < low1
-            signal_stoploss = self.entry_price > 0 and current_price < self.entry_price * (1 - self.stop_loss_pct)
-            signal_takeprofit = self.entry_price > 0 and current_price > self.entry_price * (1 + self.take_profit_pct)
+            signal_stoploss = entry_price > 0 and current_price < entry_price * (1 - self.stop_loss_pct)
+            signal_takeprofit = entry_price > 0 and current_price > entry_price * (1 + self.take_profit_pct)
             
             if signal_takeprofit:
-                profit_pct = ((current_price / self.entry_price) - 1) * 100
+                profit_pct = ((current_price / entry_price) - 1) * 100
                 return {
                     'action': 'sell',
                     'reason': f'止盈触发：盈利{profit_pct:.2f}% (目标{self.take_profit_pct*100}%)',
@@ -148,7 +157,7 @@ class DoubleEmaChannelStrategy:
                 }
             
             elif signal_stoploss:
-                profit_pct = ((current_price / self.entry_price) - 1) * 100
+                profit_pct = ((current_price / entry_price) - 1) * 100
                 return {
                     'action': 'sell',
                     'reason': f'止损触发：亏损{profit_pct:.2f}% (止损线-{self.stop_loss_pct*100}%)',
@@ -158,7 +167,7 @@ class DoubleEmaChannelStrategy:
                 }
             
             elif signal_breakdown:
-                profit_pct = ((current_price / self.entry_price) - 1) * 100 if self.entry_price > 0 else 0
+                profit_pct = ((current_price / entry_price) - 1) * 100 if entry_price > 0 else 0
                 return {
                     'action': 'sell',
                     'reason': f'价格跌破蓝色下沿(${low1:.2f})，盈利{profit_pct:.2f}%',
@@ -174,24 +183,10 @@ class DoubleEmaChannelStrategy:
                     'confidence': 0.0
                 }
     
-    def execute_trade(self, action: str, price: float):
-        """
-        执行交易并更新状态
-        
-        Args:
-            action: 交易动作 ('buy' 或 'sell')
-            price: 交易价格
-        """
-        if action == 'buy':
-            self.position = 1
-            self.entry_price = price
-        elif action == 'sell':
-            self.position = 0
-            self.entry_price = 0
-    
     def get_strategy_info(self) -> Dict[str, Any]:
         """返回策略信息"""
-        return {
+        info = super().get_strategy_info()
+        info.update({
             'name': 'double_ema_channel',
             'description': '双EMA通道突破策略',
             'parameters': {
@@ -203,4 +198,5 @@ class DoubleEmaChannelStrategy:
             },
             'risk_level': 'medium',
             'suitable_market': ['trending', 'volatile']
-        }
+        })
+        return info

@@ -8,9 +8,10 @@ from typing import Dict, Any, List
 import pandas as pd
 from backend.config.config_loader import get_config
 import numpy as np
+from backend.strategies.base_strategy import BaseStrategy
 
 
-class GridTradingStrategy:
+class GridTradingStrategy(BaseStrategy):
     """
     网格交易策略
     
@@ -44,8 +45,14 @@ class GridTradingStrategy:
             grid_num: 网格数量
             initial_grids: 初始建仓网格数
             auto_adjust: 是否自动调整网格范围
-            lookback_days: 用于自动调整的回看天数
         """
+        super().__init__(
+            price_lower=price_lower,
+            price_upper=price_upper,
+            grid_num=grid_num,
+            initial_grids=initial_grids,
+            auto_adjust=auto_adjust
+        )
         self.config = get_config()
         self.price_lower = price_lower
         self.price_upper = price_upper
@@ -58,11 +65,6 @@ class GridTradingStrategy:
         self.grids = []  # 网格价格点位
         self.grid_size = 0  # 每格大小
         self.initialized = False
-        
-        # 持仓状态
-        self.positions = {}  # {grid_index: quantity} 每个网格的持仓
-        self.total_position = 0
-        self.last_action_price = 0
     
     def get_required_data_points(self) -> int:
         """返回策略需要的最小数据点数"""
@@ -104,12 +106,13 @@ class GridTradingStrategy:
         
         return int((price - self.price_lower) / self.grid_size)
     
-    def generate_signals(self, market_data: pd.DataFrame) -> Dict[str, Any]:
+    def generate_signals(self, market_data: pd.DataFrame, **context) -> Dict[str, Any]:
         """
         生成交易信号
         
         Args:
             market_data: DataFrame包含OHLCV数据
+            **context: 上下文信息（如持仓状态、网格持仓信息等）
         
         Returns:
             交易信号字典
@@ -129,13 +132,19 @@ class GridTradingStrategy:
         current_price = latest['Close']
         current_grid = self._find_grid_level(current_price)
         
+        # 从上下文获取持仓信息
+        current_position = context.get('position', 0)
+        entry_price = context.get('entry_price', 0)
+        positions_dict = context.get('positions', {})  # 网格持仓字典
+        total_position = sum(positions_dict.values()) if positions_dict else current_position
+        
         # 价格超出网格范围的处理
         # 价格大幅低于网格下限 - 分情况处理，避免盲目抄底
         if current_price < self.price_lower * 0.95:
             drop_ratio = (self.price_lower - current_price) / self.price_lower
             
             # 策略1：如果已有持仓，谨慎加仓（防止继续下跌越套越深）
-            if self.total_position > 0:
+            if total_position > 0:
                 # 已有持仓时，降低买入信心
                 # 跌破5%: conf=0.4, 跌破10%: conf=0.5, 跌破20%: conf=0.6
                 confidence = min(0.4 + drop_ratio * 0.5, 0.6)
@@ -150,7 +159,7 @@ class GridTradingStrategy:
                         'total_grids': self.grid_num,
                         'grid_range': f'${self.price_lower:.2f} - ${self.price_upper:.2f}',
                         'drop_from_lower': f'{drop_ratio:.1%}',
-                        'existing_position': self.total_position
+                        'existing_position': total_position
                     }
                 }
             
@@ -206,7 +215,7 @@ class GridTradingStrategy:
         # 价格大幅高于网格上限 - 卖出获利
         if current_price > self.price_upper * 1.05:
             # 如果有持仓，卖出获利；如果没持仓，等待回落
-            if self.total_position > 0:
+            if total_position > 0:
                 # 计算超出幅度
                 exceed_ratio = (current_price - self.price_upper) / self.price_upper
                 confidence = min(0.8 + exceed_ratio, 0.95)
@@ -236,7 +245,7 @@ class GridTradingStrategy:
                 }
         
         # 初始建仓：空仓时在中间档位开始建仓
-        if self.total_position == 0 and current_grid <= self.grid_num // 2:
+        if total_position == 0 and current_grid <= self.grid_num // 2:
             # 初始建仓信心：位置越低，信心越高
             # 网格0: 0.9, 网格1: 0.82, 网格2: 0.74, 网格5: 0.5
             # 使用反向计算：距离底部越近，信心越高
@@ -257,9 +266,12 @@ class GridTradingStrategy:
             }
         
         # 有持仓情况下的交易逻辑
-        if self.total_position > 0:
+        if total_position > 0:
             # 计算平均成本
-            avg_cost = sum(self.grids[g] * q for g, q in self.positions.items()) / self.total_position if self.total_position > 0 else 0
+            if positions_dict and len(self.grids) > 0:
+                avg_cost = sum(self.grids[g] * q for g, q in positions_dict.items() if g < len(self.grids)) / total_position if total_position > 0 else entry_price
+            else:
+                avg_cost = entry_price
             profit_pct = ((current_price / avg_cost) - 1) * 100 if avg_cost > 0 else 0
             
             # 卖出信号：价格上涨到上方网格
@@ -283,12 +295,12 @@ class GridTradingStrategy:
                     'grid_info': {
                         'current_grid': current_grid,
                         'avg_cost': avg_cost,
-                        'positions': len(self.positions)
+                        'positions': len(positions_dict)
                     }
                 }
             
             # 加仓信号：价格下跌到下方网格且未在此网格建仓
-            elif current_grid < self.grid_num // 2 and current_grid not in self.positions:
+            elif current_grid < self.grid_num // 2 and current_grid not in positions_dict:
                 # 加仓信心：越接近下限，信心越高（0.2 -> 0.9）
                 # 距离下限越近，买入信心越强
                 distance_to_bottom = current_grid / (self.grid_num // 2)  # 1 at mid, 0 at bottom
@@ -303,7 +315,7 @@ class GridTradingStrategy:
                     'grid_info': {
                         'current_grid': current_grid,
                         'avg_cost': avg_cost,
-                        'positions': len(self.positions)
+                        'positions': len(positions_dict)
                     }
                 }
         
@@ -316,42 +328,21 @@ class GridTradingStrategy:
             'grid_info': {
                 'current_grid': current_grid,
                 'total_grids': self.grid_num,
-                'positions': len(self.positions),
-                'total_position': self.total_position
+                'positions': len(positions_dict),
+                'total_position': total_position
             }
         }
     
-    def execute_trade(self, action: str, price: float):
-        """
-        执行交易并更新持仓状态
-        
-        Args:
-            action: 交易动作
-            price: 交易价格
-        """
-        grid_level = self._find_grid_level(price)
-        
-        if action == 'buy':
-            # 记录在该网格的持仓
-            if grid_level not in self.positions:
-                self.positions[grid_level] = 0
-            self.positions[grid_level] += 1
-            self.total_position += 1
-            self.last_action_price = price
-            
-        elif action == 'sell':
-            # 卖出最高网格的持仓（先进先出）
-            if self.positions:
-                highest_grid = max(self.positions.keys())
-                self.positions[highest_grid] -= 1
-                if self.positions[highest_grid] <= 0:
-                    del self.positions[highest_grid]
-                self.total_position -= 1
-                self.last_action_price = price
+    def reset(self):
+        """重置策略状态"""
+        self.initialized = False
+        self.grids = []
+        self.grid_size = 0
     
     def get_strategy_info(self) -> Dict[str, Any]:
         """返回策略信息"""
-        return {
+        info = super().get_strategy_info()
+        info.update({
             'name': 'grid_trading',
             'description': '网格交易策略（适合震荡行情）',
             'parameters': {
@@ -361,4 +352,5 @@ class GridTradingStrategy:
             },
             'risk_level': 'medium',
             'suitable_market': ['sideways', 'range-bound']
-        }
+        })
+        return info

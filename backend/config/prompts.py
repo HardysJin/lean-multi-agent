@@ -9,7 +9,7 @@ STRATEGY_DESCRIPTIONS = {
     "momentum": "For strong trending markets",
     "mean_reversion": "For overextended moves likely to reverse",
     "double_ema_channel": "For strong trending markets with breakout confirmation (dual EMA channels with volume)",
-    "buy_and_hold": "Baseline strategy for long-term bullish outlook (buy once and hold, no rebalancing)",
+    # "buy_and_hold": "Baseline strategy for long-term bullish outlook (buy once and hold, no rebalancing)",
     "hold": "When uncertain or high risk - maintain current position",
     # 新增：独立仓位控制策略
     "buy": "Buy/add to position - supports percentage-based position sizing (e.g., buy to 70% position)",
