@@ -3,13 +3,42 @@
 
 system:
   lookback_days: 150          # 回看天数（日历天数，约107个交易日，确保策略有足够数据）
-  forecast_days: 14            # 预测天数（决策的有效期，每周一次）
-  backtest_start: "2025-11-01"
-  backtest_end: "2025-11-11"
+  forecast_days: 14            # 预测天数（决策的有效期，标准双周一次）
+  backtest_start: "2025-04-04"
+  backtest_end: "2025-04-11"
   initial_capital: 100000
   commission: 0.001  # 0.1% 手续费
   slippage: 0.001    # 0.1% 滑点
-  prompt_version: v2  # 使用的提示模板版本（v1或v2）
+  prompt_version: v2  # 使用的提示模板版本（v1=简洁版，v2=增强版，带熊市/恐慌识别）
+  
+  # 动态决策频率配置（根据市场波动率自适应调整）
+  adaptive_rebalance:
+    enabled: true              # 是否启用动态频率
+    min_days: 1                # 最短决策间隔（极端恐慌期）
+    max_days: 14               # 最长决策间隔（低波动期）
+    
+    # 指数衰减公式: days = max_days * exp(-decay_rate * max(0, vix - vix_baseline))
+    # 
+    # 参数说明:
+    #   vix_baseline: VIX基线，低于此值保持max_days天
+    #   decay_rate: 衰减速率，越大则VIX上升时天数下降越快
+    # 
+    # 示例 (vix_baseline=15, decay_rate=0.15):
+    #   VIX=15 → 14天
+    #   VIX=20 → 7天
+    #   VIX=25 → 3.5天 → 4天
+    #   VIX=30 → 2天
+    #   VIX=35 → 1天
+    #   VIX=40+ → 1天
+    vix_baseline: 15.0         # VIX基线（低于此值保持最大间隔）
+    decay_rate: 0.15           # 衰减率（建议范围0.10-0.20）
+    
+    # 早期触发条件（即使不到决策日，也立即触发）
+    early_triggers:
+      enabled: true
+      vix_spike: 40            # VIX突破40立即触发
+      daily_price_move: 0.10   # 单日价格变化>10%立即触发
+      vix_change_pct: 0.25     # VIX单日变化>25%立即触发
 
 agents:
   technical:
@@ -53,12 +82,14 @@ risk:
 
 strategies:
   available:
-    - grid_trading
-    - momentum
-    - mean_reversion
-    - double_ema_channel
-    - buy_and_hold
-    - hold
+    - buy           # 买入策略（支持百分比仓位）
+    - sell          # 卖出策略（支持百分比仓位）
+    - hold          # 持有策略（保持当前仓位）
+    - momentum      # 动量策略
+    - mean_reversion # 均值回归
+    - double_ema_channel # 双EMA通道
+    - buy_and_hold  # 买入持有（baseline）
+    - grid_trading  # 网格交易
   default: hold  # 默认策略（当LLM失败或不确定时）
 
 data_sources:

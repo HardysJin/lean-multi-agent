@@ -26,6 +26,7 @@ from backend.data_collectors.sentiment_analyzer import SentimentAnalyzer
 from backend.config.config_loader import get_config
 from backend.portfolio.portfolio_manager import PortfolioManager
 from backend.utils.logger import get_logger
+from backend.utils.adaptive_rebalance import AdaptiveRebalanceCalculator
 
 logger = get_logger(__name__)
 
@@ -79,6 +80,36 @@ class LLMBacktestEngine:
         
         # 策略实例缓存 {strategy_name: strategy_instance}
         self.strategy_instances = {}
+        
+        # 动态Rebalance频率计算器
+        adaptive_config = getattr(self.config.system, 'adaptive_rebalance', None)
+        if adaptive_config:
+            # Pydantic model，转为dict
+            if hasattr(adaptive_config, 'model_dump'):
+                adaptive_config_dict = adaptive_config.model_dump()
+            elif hasattr(adaptive_config, 'dict'):
+                adaptive_config_dict = adaptive_config.dict()
+            else:
+                # 回退方案：手动提取属性
+                adaptive_config_dict = {
+                    'enabled': getattr(adaptive_config, 'enabled', False),
+                    'min_days': getattr(adaptive_config, 'min_days', 1),
+                    'max_days': getattr(adaptive_config, 'max_days', 14),
+                    'use_formula': getattr(adaptive_config, 'use_formula', True),  # NEW
+                    'vix_thresholds': getattr(adaptive_config, 'vix_thresholds', {}),
+                    'frequency_map': getattr(adaptive_config, 'frequency_map', {}),
+                    'early_triggers': getattr(adaptive_config, 'early_triggers', {})
+                }
+            self.adaptive_rebalance = AdaptiveRebalanceCalculator(adaptive_config_dict)
+            if adaptive_config_dict.get('enabled', False):
+                logger.info("✓ 动态决策频率已启用 (VIX阈值: 40/30/25/20)")
+        else:
+            # 如果配置不存在，创建一个禁用的计算器
+            self.adaptive_rebalance = AdaptiveRebalanceCalculator({'enabled': False})
+        
+        # 用于跟踪上次决策时的市场状态（用于早期触发判断）
+        self.last_decision_market_state = None
+        self.last_decision_date = None
         
     def run(
         self,
@@ -137,15 +168,16 @@ class LLMBacktestEngine:
         
         logger.info(f"市场数据: {len(price_df)}条记录")
         
-        # 生成决策时间点（每周一次）
-        decision_dates = self._generate_decision_dates(start_date, end_date)
-        logger.info(f"决策时间点: {len(decision_dates)}次")
+        # 动态决策循环（根据市场波动率自适应调整频率）
+        current_date = start_date
+        decision_count = 0
         
-        # 逐个决策点执行
-        for i, decision_date in enumerate(decision_dates):
+        while current_date <= end_date:
+            decision_count += 1
+            decision_date = current_date
             logger.info("")
             logger.info("-" * 80)
-            logger.info(f"决策点 {i+1}/{len(decision_dates)}: {decision_date.date()}")
+            logger.info(f"决策点 {decision_count}: {decision_date.date()}")
             logger.info("-" * 80)
             
             # 收集截至决策日的数据
@@ -196,6 +228,8 @@ class LLMBacktestEngine:
                 'lookback_days': self.config.system.lookback_days,
                 'forecast_days': self.config.system.forecast_days,
                 'market_data': period_data['market_data'],
+                'market_data_recent': period_data.get('market_data_recent', {}),
+                'market_data_medium': period_data.get('market_data_medium', {}),
                 'technical_analysis': technical_result,
                 'sentiment_analysis': sentiment_result,
                 'news_analysis': news_result,
@@ -216,9 +250,29 @@ class LLMBacktestEngine:
                 decision=decision
             )
             
-            # 执行策略：在forecast期间（下一周）每天运行策略
-            next_decision_date = decision_dates[i+1] if i+1 < len(decision_dates) else end_date
+            # ========== 动态频率计算 ==========
+            # 提取当前市场状态
+            current_market_state = self._extract_market_state(period_data, technical_result)
+            
+            # 计算下次决策间隔（基于波动率）
+            rebalance_result = self.adaptive_rebalance.calculate_next_rebalance_days(
+                market_state=current_market_state,
+                current_regime=decision.get('regime_classification', {}).get('primary_regime'),
+                default_days=self.config.system.forecast_days
+            )
+            
+            next_rebalance_days = rebalance_result['days']
+            logger.info(f"📅 动态频率: {next_rebalance_days}天后复查 ({rebalance_result['regime']})")
+            logger.info(f"   推理: {rebalance_result['reasoning']}")
+            
+            # 更新上次决策状态（用于早期触发判断）
+            self.last_decision_market_state = current_market_state
+            self.last_decision_date = decision_date
+            
+            # 执行策略：在forecast期间每天运行策略
             forecast_start = decision_date
+            # 下次决策日期 = 当前日期 + 动态计算的天数
+            next_decision_date = decision_date + timedelta(days=next_rebalance_days)
             forecast_end = min(next_decision_date, end_date)
             
             logger.info(f"执行期间: {forecast_start.date()} 到 {forecast_end.date()}")
@@ -232,6 +286,7 @@ class LLMBacktestEngine:
             logger.info(f"  将在 {len(forecast_days)} 个交易日内每日运行策略")
             
             # 每天运行策略
+            early_trigger_occurred = False
             for day_idx, trading_day in enumerate(forecast_days, 1):
                 logger.info(f"  Day {day_idx}: {trading_day.date()}")
                 
@@ -258,8 +313,44 @@ class LLMBacktestEngine:
                 
                 if execution_result['action'] != 'hold':
                     logger.info(f"    → {execution_result['action'].upper()}: {execution_result.get('shares', 0)} 股")
+                
+                # ========== 早期触发检查 ==========
+                # 检查是否应该提前触发下一次决策
+                if day_idx >= 1 and self.last_decision_market_state:  # 至少执行1天后才检查
+                    days_since_decision = (trading_day - decision_date).days
+                    
+                    # 获取当日市场状态
+                    try:
+                        daily_period_data = self._collect_period_data(
+                            symbol=symbol,
+                            analysis_start=trading_day - timedelta(days=30),
+                            analysis_end=trading_day,
+                            decision_date=trading_day
+                        )
+                        daily_technical = self.technical_agent.analyze(
+                            daily_period_data['market_data'],
+                            as_of_date=trading_day
+                        )
+                        daily_market_state = self._extract_market_state(daily_period_data, daily_technical)
+                        
+                        # 检查早期触发条件
+                        trigger_result = self.adaptive_rebalance.should_trigger_early_rebalance(
+                            current_market_state=daily_market_state,
+                            last_market_state=self.last_decision_market_state,
+                            days_since_last_decision=days_since_decision
+                        )
+                        
+                        if trigger_result['should_trigger']:
+                            logger.warning(f"⚡ 早期触发条件满足: {trigger_result['reason']}")
+                            logger.warning(f"   将在 {trading_day.date()} 提前进行下次决策")
+                            # 更新下次决策日期为当前日
+                            next_decision_date = trading_day
+                            early_trigger_occurred = True
+                            break  # 跳出每日执行循环，进入下一次决策
+                    except Exception as e:
+                        logger.debug(f"早期触发检查失败: {e}")
             
-            # 打印本周汇总
+            # 打印本期汇总
             portfolio_history = self.portfolio.get_portfolio_history()
             if portfolio_history:
                 portfolio_value = portfolio_history[-1]['value']
@@ -271,8 +362,16 @@ class LLMBacktestEngine:
                 current_price = self._get_price_at_date(price_df, decision_date)
                 portfolio_value = self.portfolio.get_portfolio_value({symbol: current_price} if current_price else {})
                 logger.info(f"组合价值: ${portfolio_value:,.2f} (无交易日)")
-                logger.info(f"现金: ${self.portfolio.cash:,.2f}")
-                logger.info(f"持仓: {self.portfolio.get_all_positions()}")
+            
+            # ========== 更新下次决策日期 ==========
+            if early_trigger_occurred:
+                # 如果早期触发，已经更新了next_decision_date
+                logger.info(f"⏭️  提前触发，下次决策: {next_decision_date.date()}")
+            else:
+                logger.info(f"⏭️  正常周期，下次决策: {next_decision_date.date()}")
+            
+            # 移动到下次决策日期
+            current_date = next_decision_date
         
         # 计算最终结果
         results = self._calculate_results(symbol, price_df, start_date, end_date)
@@ -285,7 +384,7 @@ class LLMBacktestEngine:
         return results
     
     def _generate_decision_dates(self, start_date: datetime, end_date: datetime) -> List[datetime]:
-        """生成决策时间点（每周）"""
+        """生成决策时间点（每周）- 已废弃，使用动态频率循环"""
         dates = []
         current = start_date
         
@@ -294,6 +393,69 @@ class LLMBacktestEngine:
             current += timedelta(days=self.config.system.forecast_days)
         
         return dates
+    
+    def _extract_market_state(
+        self,
+        period_data: Dict[str, Any],
+        technical_result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        从市场数据和技术分析中提取关键指标，用于动态频率计算
+        
+        Returns:
+            {
+                'vix': float,
+                'realized_volatility': float,
+                'price_change_7d': float,
+                'price_change_1d': float
+            }
+        """
+        # 提取VIX
+        vix = 15.0  # 默认值
+        if '^VIX' in period_data['market_data']:
+            vix_data = period_data['market_data']['^VIX']
+            if 'ohlcv' in vix_data and len(vix_data['ohlcv']) > 0:
+                vix = vix_data['ohlcv'][-1]['Close']
+        
+        # 提取实际波动率（从技术分析）
+        realized_vol = technical_result.get('volatility', {}).get('realized_volatility', 0.15)
+        if isinstance(realized_vol, str):
+            # 如果是字符串，尝试解析（例如 "15.0%"）
+            try:
+                realized_vol = float(realized_vol.replace('%', '')) / 100
+            except:
+                realized_vol = 0.15
+        
+        # 提取价格变化（从最近的市场数据）
+        price_change_7d = 0.0
+        price_change_1d = 0.0
+        
+        # 尝试从market_data_recent获取
+        if 'market_data_recent' in period_data:
+            recent_data = period_data['market_data_recent']
+            for symbol, data in recent_data.items():
+                if symbol not in ['^VIX', 'TLT', 'GLD']:  # 跳过VIX和债券，使用股票
+                    if 'ohlcv' in data and len(data['ohlcv']) > 1:
+                        ohlcv = data['ohlcv']
+                        # 计算7天变化
+                        if len(ohlcv) >= 7:
+                            price_7d_ago = ohlcv[-7]['Close']
+                            price_now = ohlcv[-1]['Close']
+                            price_change_7d = (price_now - price_7d_ago) / price_7d_ago
+                        
+                        # 计算1天变化
+                        if len(ohlcv) >= 2:
+                            price_1d_ago = ohlcv[-2]['Close']
+                            price_now = ohlcv[-1]['Close']
+                            price_change_1d = (price_now - price_1d_ago) / price_1d_ago
+                        break  # 使用第一个有效的股票数据
+        
+        return {
+            'vix': vix,
+            'realized_volatility': realized_vol,
+            'price_change_7d': price_change_7d,
+            'price_change_1d': price_change_1d
+        }
     
     def _collect_period_data(
         self,
@@ -304,11 +466,27 @@ class LLMBacktestEngine:
     ) -> Dict[str, Any]:
         """收集特定时间段的数据（模拟真实环境）"""
         
-        # 市场数据
+        # 市场数据 - 全周期
         market_data = self.market_collector.collect(
             start_date=analysis_start,
             end_date=analysis_end
         )
+        
+        # 市场数据 - 近期30天 (确保不早于analysis_start)
+        recent_start = max(decision_date - timedelta(days=30), analysis_start)
+        market_data_recent = self.market_collector.collect(
+            start_date=recent_start,
+            end_date=analysis_end
+        )
+        logger.debug(f"Recent data ({recent_start.date()} to {analysis_end.date()}): {len(market_data_recent)} tickers")
+        
+        # 市场数据 - 中期60天 (确保不早于analysis_start)
+        medium_start = max(decision_date - timedelta(days=60), analysis_start)
+        market_data_medium = self.market_collector.collect(
+            start_date=medium_start,
+            end_date=analysis_end
+        )
+        logger.debug(f"Medium data ({medium_start.date()} to {analysis_end.date()}): {len(market_data_medium)} tickers")
         
         # 新闻数据
         news_data = self.news_collector.collect(
@@ -325,6 +503,8 @@ class LLMBacktestEngine:
         
         return {
             'market_data': market_data,
+            'market_data_recent': market_data_recent,
+            'market_data_medium': market_data_medium,
             'news_data': news_data,
             'sentiment_data': sentiment_data
         }
@@ -456,6 +636,14 @@ class LLMBacktestEngine:
                 last_buy_price = self.portfolio.get_last_buy_price()
                 if last_buy_price:
                     strategy.entry_price = last_buy_price
+        
+        # 为新的position策略注入当前仓位和组合价值
+        if hasattr(strategy, '_current_position'):
+            # 计算当前持仓比例 (position_value / total_assets)
+            position_shares = self.portfolio.get_position_shares(symbol)
+            total_value = self.portfolio.get_total_value(current_price if position_shares > 0 else 0)
+            strategy._current_position = (position_shares * current_price / total_value) if total_value > 0 else 0.0
+            strategy._portfolio_value = total_value
         
         # 调用策略的generate_signals方法
         strategy_result = strategy.generate_signals(period_prices)

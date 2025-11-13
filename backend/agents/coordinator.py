@@ -184,22 +184,48 @@ class WeeklyCoordinator(BaseAgent):
         last_period_pnl = data.get('last_period_pnl', 0.0)
         decision_history = self._format_decision_history(data.get('decision_history', []))
         
-        # 使用模板（根据版本选择）
-        prompt = self.user_prompt_template.format(
-            analysis_start_date=analysis_start,
-            analysis_end_date=analysis_end,
-            forecast_start_date=forecast_start,
-            forecast_end_date=forecast_end,
-            lookback_days=lookback_days,
-            forecast_days=forecast_days,
-            market_data=market_data,
-            technical_analysis=technical_analysis,
-            sentiment_analysis=sentiment_analysis,
-            news_summary=news_analysis,
-            current_portfolio=current_portfolio,
-            last_period_pnl=f"${last_period_pnl:,.2f}",
-            decision_history=decision_history
-        )
+        # V2需要额外的多时间尺度数据
+        if self.prompt_version == 'v2':
+            market_data_recent = self._format_market_data(data.get('market_data_recent', {}))
+            market_data_medium = self._format_market_data(data.get('market_data_medium', {}))
+            # 最近7天的每日收盘价（从recent数据中提取）
+            recent_prices_7d = self._format_recent_prices(data.get('market_data_recent', {}), days=7)
+            
+            prompt = self.user_prompt_template.format(
+                analysis_start_date=analysis_start,
+                analysis_end_date=analysis_end,
+                forecast_start_date=forecast_start,
+                forecast_end_date=forecast_end,
+                lookback_days=lookback_days,
+                forecast_days=forecast_days,
+                market_data=market_data,
+                market_data_recent=market_data_recent,
+                market_data_medium=market_data_medium,
+                recent_prices_7d=recent_prices_7d,
+                technical_analysis=technical_analysis,
+                sentiment_analysis=sentiment_analysis,
+                news_summary=news_analysis,
+                current_portfolio=current_portfolio,
+                last_period_pnl=f"${last_period_pnl:,.2f}",
+                decision_history=decision_history
+            )
+        else:
+            # V1 使用原有格式
+            prompt = self.user_prompt_template.format(
+                analysis_start_date=analysis_start,
+                analysis_end_date=analysis_end,
+                forecast_start_date=forecast_start,
+                forecast_end_date=forecast_end,
+                lookback_days=lookback_days,
+                forecast_days=forecast_days,
+                market_data=market_data,
+                technical_analysis=technical_analysis,
+                sentiment_analysis=sentiment_analysis,
+                news_summary=news_analysis,
+                current_portfolio=current_portfolio,
+                last_period_pnl=f"${last_period_pnl:,.2f}",
+                decision_history=decision_history
+            )
         
         return prompt
     
@@ -213,13 +239,68 @@ class WeeklyCoordinator(BaseAgent):
             if ticker == '^VIX':
                 ticker = 'VIX'
             
-            stats = data.get('weekly_stats', {})
-            price = data.get('latest_price', 0)
-            week_return = stats.get('return', 0)
-            
-            lines.append(f"{ticker}: ${price:.2f} ({week_return:+.2%})")
+            # 兼容不同数据结构
+            if isinstance(data, dict):
+                stats = data.get('weekly_stats', {})
+                price = data.get('latest_price', 0)
+                week_return = stats.get('return', 0)
+                
+                if price > 0:  # 只添加有效数据
+                    lines.append(f"{ticker}: ${price:.2f} ({week_return:+.2%})")
         
+        # 如果没有有效数据行，返回不可用
+        if not lines:
+            return "Market data not available"
+            
         return ", ".join(lines)
+    
+    def _format_recent_prices(self, market_data: Dict[str, Any], days: int = 7) -> str:
+        """
+        格式化最近N天的每日收盘价
+        
+        Args:
+            market_data: 市场数据字典
+            days: 要显示的天数（默认7天）
+        
+        Returns:
+            格式化的价格序列字符串
+        """
+        if not market_data:
+            return "Recent price data not available"
+        
+        ticker_lines = []
+        for ticker, data in market_data.items():
+            if ticker == '^VIX':
+                ticker = 'VIX'
+            
+            if isinstance(data, dict):
+                ohlcv = data.get('ohlcv', [])
+                if not ohlcv:
+                    continue
+                
+                # 获取最近N天的数据
+                recent_data = ohlcv[-days:] if len(ohlcv) >= days else ohlcv
+                
+                if not recent_data:
+                    continue
+                
+                # 提取日期和收盘价
+                price_points = []
+                for entry in recent_data:
+                    date = entry.get('Date', '')
+                    close = entry.get('Close', 0)
+                    if date and close:
+                        # 只显示月-日
+                        date_short = date[5:] if len(date) >= 10 else date  # YYYY-MM-DD -> MM-DD
+                        price_points.append(f"{date_short}: ${close:.2f}")
+                
+                if price_points:
+                    ticker_lines.append(f"{ticker}: [{', '.join(price_points)}]")
+        
+        if not ticker_lines:
+            return "Recent price data not available"
+        
+        return "\n".join(ticker_lines)
     
     def _format_technical_analysis(self, technical: Dict[str, Any]) -> str:
         """格式化技术分析（支持v2增强字段）"""

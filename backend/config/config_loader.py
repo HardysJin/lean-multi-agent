@@ -12,6 +12,21 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings
 
 
+class AdaptiveRebalanceConfig(BaseModel):
+    """动态Rebalance频率配置 - 指数衰减公式"""
+    enabled: bool = False
+    min_days: int = 1
+    max_days: int = 14
+    vix_baseline: float = 15.0      # VIX基线
+    decay_rate: float = 0.15        # 衰减速率
+    early_triggers: Dict[str, Any] = Field(default_factory=lambda: {
+        'enabled': True,
+        'vix_spike': 40,
+        'daily_price_move': 0.10,
+        'vix_change_pct': 0.25
+    })
+
+
 class SystemConfig(BaseModel):
     """系统配置"""
     lookback_days: int = 7     # 回看天数（收集历史数据）
@@ -22,6 +37,7 @@ class SystemConfig(BaseModel):
     commission: float = 0.001
     slippage: float = 0.001
     prompt_version: str = "v1"  # Prompt版本：v1=简洁版，v2=增强版（6步regime分类）
+    adaptive_rebalance: Optional[AdaptiveRebalanceConfig] = None
 
 
 class AgentConfig(BaseModel):
