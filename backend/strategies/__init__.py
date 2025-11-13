@@ -12,6 +12,7 @@ from .double_ema_channel import DoubleEmaChannelStrategy
 from .grid_trading import GridTradingStrategy
 from .mean_reversion import MeanReversionStrategy
 from .momentum import MomentumStrategy
+from .simple_actions import BuyStrategy, SellStrategy, HoldStrategy
 from .strategy_factory import StrategyFactory
 
 __all__ = [
@@ -21,5 +22,8 @@ __all__ = [
     'GridTradingStrategy',
     'MeanReversionStrategy',
     'MomentumStrategy',
+    'BuyStrategy',
+    'SellStrategy',
+    'HoldStrategy',
     'StrategyFactory',
 ]

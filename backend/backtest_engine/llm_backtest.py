@@ -591,16 +591,12 @@ class LLMBacktestEngine:
         # 导入策略工厂
         from backend.strategies.strategy_factory import StrategyFactory
         
-        # 获取或创建策略实例（复用同一个实例以保持状态）
-        if strategy_name not in self.strategy_instances:
-            try:
-                self.strategy_instances[strategy_name] = StrategyFactory.create_strategy(strategy_name)
-                logger.info(f"创建新策略实例: {strategy_name}")
-            except ValueError as e:
-                logger.error(f"无法创建策略 {strategy_name}: {e}")
-                return {'action': 'none', 'reason': 'invalid_strategy'}
-        
-        strategy = self.strategy_instances[strategy_name]
+        try:
+            strategy = StrategyFactory.create_strategy(strategy_name)
+            logger.info(f"创建新策略实例: {strategy_name}")
+        except ValueError as e:
+            logger.error(f"无法创建策略 {strategy_name}: {e}")
+            return {'action': 'none', 'reason': 'invalid_strategy'}
         
         # 准备策略所需的市场数据
         # 获取策略所需的最小数据点数
@@ -634,7 +630,7 @@ class LLMBacktestEngine:
                 entry_price = last_buy_price
         
         # 计算当前持仓比例和组合价值
-        total_value = self.portfolio.get_total_value(current_price if position_shares > 0 else 0)
+        total_value = self.portfolio.get_portfolio_value({symbol: current_price})
         position_ratio = (position_shares * current_price / total_value) if total_value > 0 else 0.0
         
         # 构建上下文字典

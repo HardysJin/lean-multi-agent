@@ -9,6 +9,7 @@ from .buy_and_hold import BuyAndHoldStrategy
 from .grid_trading import GridTradingStrategy
 from .momentum import MomentumStrategy
 from .mean_reversion import MeanReversionStrategy
+from .simple_actions import BuyStrategy, SellStrategy, HoldStrategy
 
 
 class StrategyFactory:
@@ -24,6 +25,9 @@ class StrategyFactory:
         'grid_trading': GridTradingStrategy,
         'momentum': MomentumStrategy,
         'mean_reversion': MeanReversionStrategy,
+        'buy': BuyStrategy,
+        'sell': SellStrategy,
+        'hold': HoldStrategy,
     }
     
     # 策略别名
@@ -31,7 +35,7 @@ class StrategyFactory:
         'ema_channel': 'double_ema_channel',
         'ema': 'double_ema_channel',
         'bah': 'buy_and_hold',
-        'hold': 'buy_and_hold',
+        'hold': 'hold',
         'grid': 'grid_trading',
         'mom': 'momentum',
         'mr': 'mean_reversion',

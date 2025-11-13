@@ -31,8 +31,8 @@ class MomentumStrategy(BaseStrategy):
     def __init__(
         self,
         momentum_period: int = 20,
-        entry_threshold: float = 1.5,   # 1.5%上涨动量（进一步降低买入门槛）
-        exit_threshold: float = -2.0,   # -2%下跌动量（更及时止损）
+        entry_threshold: float = 1.0,   # 1.0%上涨动量（进一步降低买入门槛）
+        exit_threshold: float = -3.0,   # -3.0%下跌动量（更及时止损）
         ma_period: int = 50,
         volume_multiplier: float = 1.2,  # 1.2倍（不要求成交量放大）
         use_rsi_filter: bool = True,   # 关闭RSI过滤器（避免错过买入机会）

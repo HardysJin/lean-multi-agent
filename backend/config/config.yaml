@@ -4,8 +4,8 @@
 system:
   lookback_days: 150          # 回看天数（日历天数，约107个交易日，确保策略有足够数据）
   forecast_days: 14            # 预测天数（决策的有效期，标准双周一次）
-  backtest_start: "2025-04-04"
-  backtest_end: "2025-04-11"
+  backtest_start: "2025-03-21"
+  backtest_end: "2025-05-11"
   initial_capital: 100000
   commission: 0.001  # 0.1% 手续费
   slippage: 0.001    # 0.1% 滑点
@@ -31,7 +31,7 @@ system:
     #   VIX=35 → 1天
     #   VIX=40+ → 1天
     vix_baseline: 15.0         # VIX基线（低于此值保持最大间隔）
-    decay_rate: 0.15           # 衰减率（建议范围0.10-0.20）
+    decay_rate: 0.1           # 衰减率（建议范围0.10-0.20）
     
     # 早期触发条件（即使不到决策日，也立即触发）
     early_triggers:
@@ -82,14 +82,14 @@ risk:
 
 strategies:
   available:
+    - hold          # 持有策略（保持当前仓位）
+    - grid_trading  # 网格交易
+    - momentum      # 动量策略
+    - double_ema_channel # 双EMA通道
+    - mean_reversion # 均值回归
     - buy           # 买入策略（支持百分比仓位）
     - sell          # 卖出策略（支持百分比仓位）
-    - hold          # 持有策略（保持当前仓位）
-    - momentum      # 动量策略
-    - mean_reversion # 均值回归
-    - double_ema_channel # 双EMA通道
-    - buy_and_hold  # 买入持有（baseline）
-    - grid_trading  # 网格交易
+    # - buy_and_hold  # 买入持有（baseline）
   default: hold  # 默认策略（当LLM失败或不确定时）
 
 data_sources:
